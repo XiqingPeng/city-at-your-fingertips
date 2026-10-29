@@ -4,7 +4,7 @@
 
 ## Windows 启动
 
-在本目录打开 PowerShell，运行：
+双击本目录的 `启动城市Demo.cmd`，保持打开的命令窗口运行，然后在浏览器访问 http://localhost:8000。如果浏览器打开时服务尚未就绪，稍等几秒刷新页面。也可以在本目录打开 PowerShell，运行：
 
 ```powershell
 python -m http.server 8000 --bind 127.0.0.1
