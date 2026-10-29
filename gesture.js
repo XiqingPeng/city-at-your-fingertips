@@ -1,31 +1,55 @@
-// State is deliberately separate from rendering so a learned temporal model can
-// later replace this mapping without changing the scene or camera pipeline.
 const clamp = value => Math.max(0, Math.min(1, value));
+const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+// Maps short stretches of movement to incremental changes. A return stroke with
+// an open hand does not undo a lift. Pinch while moving down to lower buildings.
 export function createGestureMapper() {
-  let previous = null, energy = 0;
+  let previous = null, history = [], waveUntil = 0;
   return {
-    reset() { previous = null; energy = 0; },
-    update(hands, timestamp, forest) {
-      if (!hands.length) { previous = null; energy = 0; return {}; }
-      const centers = hands.map(hand => hand[9]);
-      const y = centers.reduce((sum, point) => sum + point.y, 0) / centers.length;
-      const result = { height: clamp((0.8 - y) / 0.6) };
+    reset() { previous = null; history = []; waveUntil = 0; },
+    update(hands, timestamp, values) {
+      if (!hands.length) { this.reset(); return { gesture: '等待手进入画面' }; }
+      const centers = hands.map(h => h[9]);
+      const x = centers.reduce((s, p) => s + p.x, 0) / centers.length;
+      const y = centers.reduce((s, p) => s + p.y, 0) / centers.length;
+      const hand = hands[0];
+      const palm = Math.max(distance(hand[0], hand[9]), 0.02);
+      const pinch = distance(hand[4], hand[8]) / palm < 0.45;
+      const result = { gesture: pinch ? '捏合：向下移动降低建筑' : '张手：向上推动建筑生长' };
       if (centers.length === 2) {
-        const distance = Math.hypot(centers[0].x - centers[1].x, centers[0].y - centers[1].y);
-        result.density = clamp(1 - (distance - 0.12) / 0.55);
+        result.density = clamp(1 - (distance(centers[0], centers[1]) - 0.12) / 0.55);
       }
-      // Average positions when both hands are present to avoid a false wave
-      // when MediaPipe changes their ordering between frames.
-      const x = centers.reduce((sum, point) => sum + point.x, 0) / centers.length;
-      if (previous && previous.count === centers.length) {
-        const dt = (timestamp - previous.timestamp) / 1000;
-        if (dt > 0 && dt < 0.25) {
-          const speed = Math.min(Math.abs(x - previous.x) / dt, 3);
-          energy += (speed - energy) * (1 - Math.exp(-dt * 8));
-          if (energy > 0.45) result.forest = clamp(forest + dt * 0.11);
-        } else energy = 0;
-      } else energy = 0;
-      previous = { x, timestamp, count: centers.length };
+      if (!previous || previous.count !== hands.length || timestamp - previous.time > 300 || timestamp <= previous.time) {
+        history = []; waveUntil = 0;
+        previous = { x, y, time: timestamp, count: hands.length };
+        return result;
+      }
+      const dt = Math.min((timestamp - previous.time) / 1000, .1);
+      history.push({ x, y, time: timestamp });
+      history = history.filter(p => timestamp - p.time <= 650);
+      if (history.length > 2) {
+        const first = history[0];
+        const dx = x - first.x, dy = y - first.y;
+        // A short displacement establishes intent; integrate at a steady rate
+        // until the movement stops. Ignore return strokes for open-hand lifts.
+        if (!pinch && dy < -0.025 && Math.abs(dy) > Math.abs(dx) * .7) {
+          result.height = clamp(values.height + dt * .23);
+          result.gesture = '向上生长';
+        } else if (pinch && dy > .025 && Math.abs(dy) > Math.abs(dx) * .7) {
+          result.height = clamp(values.height - dt * .23);
+          result.gesture = '降低建筑';
+        }
+        if (!pinch && Math.abs(dx) > .035 && Math.abs(dx) > Math.abs(dy) * 1.1) waveUntil = timestamp + 350;
+        if (!pinch && timestamp < waveUntil) {
+          result.forest = clamp(values.forest + dt * .22);
+          result.gesture = '挥手：森林生长';
+        }
+        // Hold a pinch without movement to restore the city.
+        if (pinch && Math.abs(dx) < .025 && Math.abs(dy) < .025 && timestamp - first.time > 400) {
+          result.forest = clamp(values.forest - dt * .18);
+          result.gesture = '保持捏合：城市恢复';
+        }
+      }
+      previous = { x, y, time: timestamp, count: hands.length };
       return result;
     }
   };
