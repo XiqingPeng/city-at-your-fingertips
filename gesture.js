@@ -3,9 +3,9 @@ const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 // Maps short stretches of movement to incremental changes. A return stroke with
 // an open hand does not undo a lift. Pinch while moving down to lower buildings.
 export function createGestureMapper() {
-  let previous = null, history = [], waveUntil = 0, zoomSpread = null, zoomLatched = false;
+  let previous = null, history = [], waveUntil = 0, zoomSpread = null, panX = null, panY = null;
   return {
-    reset() { previous = null; history = []; waveUntil = 0; zoomSpread = null; zoomLatched = false; },
+    reset() { previous = null; history = []; waveUntil = 0; zoomSpread = null; panX = null; panY = null; },
     update(hands, timestamp, values) {
       if (!hands.length) { this.reset(); return { gesture: '等待手进入画面' }; }
       const centers = hands.map(h => h[9]);
@@ -14,43 +14,38 @@ export function createGestureMapper() {
       const hand = hands[0];
       const palm = Math.max(distance(hand[0], hand[9]), 0.02);
       const pinch = distance(hand[4], hand[8]) / palm < 0.45;
-      const bothPinch = hands.length === 2 && hands.every(h => distance(h[4], h[8]) / Math.max(distance(h[0], h[9]), 0.02) < (zoomLatched ? 0.85 : 0.65));
-      zoomLatched = bothPinch;
-      const spread = centers.length === 2 ? distance(centers[0], centers[1]) : 0;
+      const twoHands = hands.length === 2;
+      const spread = twoHands ? distance(centers[0], centers[1]) : 0;
       const result = { gesture: pinch ? '捏合：向下移动降低建筑' : '张手：向上推动建筑生长' };
-      const horizontalSpread = centers.length === 2 ? Math.abs(centers[0].x - centers[1].x) : 0;
       if (!previous || previous.count !== hands.length || timestamp - previous.time > 300 || timestamp <= previous.time) {
         history = []; waveUntil = 0;
-        zoomSpread = bothPinch ? spread : null;
-        previous = { x, y, time: timestamp, count: hands.length, spread, horizontalSpread, bothPinch };
+        zoomSpread = twoHands ? spread : null;
+        panX = twoHands ? x : null; panY = twoHands ? y : null;
+        previous = { x, y, time: timestamp, count: hands.length };
+        if (twoHands) result.gesture = '双手：开合缩放，一起移动平移';
         return result;
       }
       const dt = Math.min((timestamp - previous.time) / 1000, .1);
-      if (bothPinch) {
+      if (twoHands) {
         history = []; waveUntil = 0;
-        if (!previous.bothPinch || zoomSpread === null) zoomSpread = spread;
-        else {
-          const filtered = zoomSpread + (spread - zoomSpread) * (1 - Math.exp(-dt * 14));
-          const delta = filtered - zoomSpread;
-          if (Math.abs(delta) > .0004) result.zoomDelta = Math.max(-.08, Math.min(.08, delta * 1.7));
-          zoomSpread = filtered;
-        }
-        result.gesture = '双手捏合：拉开放大，靠近缩小';
-        previous = { x, y, time: timestamp, count: hands.length, spread, horizontalSpread, bothPinch };
+        const alpha = 1 - Math.exp(-dt * 14);
+        const filteredSpread = zoomSpread + (spread - zoomSpread) * alpha;
+        const filteredX = panX + (x - panX) * alpha;
+        const filteredY = panY + (y - panY) * alpha;
+        const dz = filteredSpread - zoomSpread, dx = filteredX - panX, dy = filteredY - panY;
+        if (Math.abs(dz) > .0004) result.zoomDelta = Math.max(-.08, Math.min(.08, dz * 1.7));
+        if (Math.hypot(dx, dy) > .0006) result.panDelta = { x: dx, y: dy };
+        zoomSpread = filteredSpread; panX = filteredX; panY = filteredY;
+        result.gesture = '双手：开合缩放，一起移动平移';
+        previous = { x, y, time: timestamp, count: hands.length };
         return result;
       }
-      if (previous.bothPinch) { history = []; zoomSpread = null; }
-      history.push({ x, y, horizontalSpread, time: timestamp });
+      zoomSpread = null; panX = null; panY = null;
+      history.push({ x, y, time: timestamp });
       history = history.filter(p => timestamp - p.time <= 650);
       if (history.length > 2) {
         const first = history[0];
         const dx = x - first.x, dy = y - first.y;
-        // Density only changes after a deliberate horizontal opening or closing;
-        // vertical lifting and detection resumption do not reset it.
-        if (hands.length === 2 && Math.abs(horizontalSpread - first.horizontalSpread) > .035 && Math.abs(horizontalSpread - first.horizontalSpread) > Math.abs(dy) * 1.2) {
-          result.density = clamp(values.density - (horizontalSpread - previous.horizontalSpread) * 1.5);
-          result.gesture = '双手开合：调整密度';
-        }
         // A short displacement establishes intent; integrate at a steady rate
         // until the movement stops. Ignore return strokes for open-hand lifts.
         if (!pinch && dy < -0.025 && Math.abs(dy) > Math.abs(dx) * .7) {
@@ -71,7 +66,7 @@ export function createGestureMapper() {
           result.gesture = '保持捏合：城市恢复';
         }
       }
-      previous = { x, y, time: timestamp, count: hands.length, spread, horizontalSpread, bothPinch };
+      previous = { x, y, time: timestamp, count: hands.length };
       return result;
     }
   };
