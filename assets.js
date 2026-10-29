@@ -16,6 +16,9 @@ const trim = new THREE.MeshStandardMaterial({color:'#e8dfc9'});
 const dark = new THREE.MeshStandardMaterial({color:'#7d7163'});
 const trunk = new THREE.MeshStandardMaterial({color:'#82705a'});
 const blossom = new THREE.MeshStandardMaterial({color:'#dca6a4'});
+const leafLight = new THREE.MeshStandardMaterial({color:'#b0c68a'});
+const warmWindow = new THREE.MeshStandardMaterial({color:'#e6ca8e'});
+const door = new THREE.MeshStandardMaterial({color:'#805b4b'});
 const buildingCache = new Map(), treeCache = new Map();
 function part(group, geometry, material, x, y, z, sx, sy, sz, shadow=true) {
   const mesh = new THREE.Mesh(geometry, material);
@@ -52,6 +55,18 @@ function makeBuilding(type, color) {
       part(group,box,mat,0,.34,0,.96,.68,.88); part(group,roofShape,roof,0,.76,0,.74,.18,.68);
       part(group,box,trim,0,.89,0,.26,.18,.26); part(group,cone,roof,0,1.02,0,.24,.16,.24); windows(group,.70,.449,2);
   }
+  // A small entrance and window highlights make the town readable at a distance.
+  // Keep the tower unobstructed and use shared low-poly meshes for every copy.
+  if (type === 0 || type === 2 || type === 5 || type === 7) {
+    const front = type === 0 ? .42 : type === 2 ? .44 : .46;
+    part(group,box,door,-.22,.12,front,.13,.24,.025,false);
+    part(group,box,warmWindow,.23,.38,front,.12,.13,.025,false);
+    part(group,box,trim,.23,.38,front+.014,.025,.13,.012,false);
+  }
+  if (type === 0 || type === 2) {
+    part(group,box,trim,0,.73,0,.98,.035,.94,false);
+    part(group,box,roof,0,.91,0,.38,.045,.38,false);
+  }
   return group;
 }
 export function building(type, color) {
@@ -70,6 +85,12 @@ function makeTree(type, color) {
     case 5: part(group,sphere,blossom,0,1.12,0,.69,.60,.62); part(group,sphere,mat,-.25,.91,.10,.32,.32,.32); break;
     case 6: part(group,cone,mat,0,1.30,0,.38,1.95,.38); break;
     default: part(group,sphere,mat,0,1.16,0,.52,.93,.50); part(group,sphere,mat,.22,.92,0,.40,.44,.42);
+  }
+  // Blocky leaf clusters give trees a layered silhouette and color variation.
+  if (type !== 6) {
+    const accent = type === 5 ? blossom : leafLight;
+    part(group,box,accent,-.30,1.24,.24,.27,.24,.27,false);
+    part(group,box,accent,.26,1.42,-.12,.25,.22,.24,false);
   }
   return group;
 }

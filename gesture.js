@@ -4,16 +4,29 @@ const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 // an open hand does not undo a lift. Pinch while moving down to lower buildings.
 export function createGestureMapper() {
   let previous = null, history = [], waveUntil = 0, zoomSpread = null, panX = null, panY = null;
+  let activeCount = 0, candidateCount = 0, candidateSince = 0, pinched = false;
   return {
-    reset() { previous = null; history = []; waveUntil = 0; zoomSpread = null; panX = null; panY = null; },
+    reset() { previous = null; history = []; waveUntil = 0; zoomSpread = null; panX = null; panY = null; activeCount = 0; candidateCount = 0; candidateSince = 0; pinched = false; },
     update(hands, timestamp, values) {
-      if (!hands.length) { this.reset(); return { gesture: '等待手进入画面' }; }
+      // Freeze output while the number of hands is uncertain; require a stable
+      // mode before accepting new positions so dropped frames cannot jump camera.
+      const count = Math.min(hands.length, 2);
+      if (count !== candidateCount || timestamp < candidateSince) { candidateCount = count; candidateSince = timestamp; }
+      if (count !== activeCount) {
+        previous = null; history = []; waveUntil = 0;
+        if (timestamp - candidateSince < 180) return { gesture: count ? '正在确认手势…' : '追踪暂时中断' };
+        activeCount = count; previous = null; history = []; waveUntil = 0;
+        zoomSpread = null; panX = null; panY = null; pinched = false;
+      }
+      if (!count) return { gesture: '等待手进入画面' };
       const centers = hands.map(h => h[9]);
       const x = centers.reduce((s, p) => s + p.x, 0) / centers.length;
       const y = centers.reduce((s, p) => s + p.y, 0) / centers.length;
       const hand = hands[0];
       const palm = Math.max(distance(hand[0], hand[9]), 0.02);
-      const pinch = distance(hand[4], hand[8]) / palm < 0.45;
+      const pinchRatio = distance(hand[4], hand[8]) / palm;
+      pinched = pinchRatio < (pinched ? 0.65 : 0.42);
+      const pinch = pinched;
       const twoHands = hands.length === 2;
       const spread = twoHands ? distance(centers[0], centers[1]) : 0;
       const result = { gesture: pinch ? '捏合：向下移动降低建筑' : '张手：向上推动建筑生长' };
