@@ -14,16 +14,29 @@ export function createGestureMapper() {
       const hand = hands[0];
       const palm = Math.max(distance(hand[0], hand[9]), 0.02);
       const pinch = distance(hand[4], hand[8]) / palm < 0.45;
+      const bothPinch = hands.length === 2 && hands.every(h => distance(h[4], h[8]) / Math.max(distance(h[0], h[9]), 0.02) < 0.45);
+      const spread = centers.length === 2 ? distance(centers[0], centers[1]) : 0;
       const result = { gesture: pinch ? '捏合：向下移动降低建筑' : '张手：向上推动建筑生长' };
-      if (centers.length === 2) {
-        result.density = clamp(1 - (distance(centers[0], centers[1]) - 0.12) / 0.55);
+      if (centers.length === 2 && !bothPinch) {
+        result.density = clamp(1 - (spread - 0.12) / 0.55);
       }
       if (!previous || previous.count !== hands.length || timestamp - previous.time > 300 || timestamp <= previous.time) {
         history = []; waveUntil = 0;
-        previous = { x, y, time: timestamp, count: hands.length };
+        previous = { x, y, time: timestamp, count: hands.length, spread, bothPinch };
         return result;
       }
       const dt = Math.min((timestamp - previous.time) / 1000, .1);
+      if (bothPinch) {
+        history = []; waveUntil = 0;
+        if (previous.bothPinch) {
+          const delta = spread - previous.spread;
+          if (Math.abs(delta) > .002) result.zoomDelta = Math.max(-.06, Math.min(.06, delta));
+        }
+        result.gesture = '双手捏合：拉开放大，靠近缩小';
+        previous = { x, y, time: timestamp, count: hands.length, spread, bothPinch };
+        return result;
+      }
+      if (previous.bothPinch) history = [];
       history.push({ x, y, time: timestamp });
       history = history.filter(p => timestamp - p.time <= 650);
       if (history.length > 2) {
@@ -49,7 +62,7 @@ export function createGestureMapper() {
           result.gesture = '保持捏合：城市恢复';
         }
       }
-      previous = { x, y, time: timestamp, count: hands.length };
+      previous = { x, y, time: timestamp, count: hands.length, spread, bothPinch };
       return result;
     }
   };

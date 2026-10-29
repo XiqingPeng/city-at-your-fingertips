@@ -7,3 +7,10 @@ const down=Array.from({length:12},(_,i)=>[.5,.3+i*.015]); assert.equal(run(down)
 const wave=Array.from({length:30},(_,i)=>[.5+.16*Math.sin(i*.35),.5]); assert(run(wave).forest>.5);
 const hold=Array.from({length:30},()=>[.5,.5]); assert(run(hold,true).forest<.5);
 console.log('gesture sequence checks passed');
+
+const zoom = createGestureMapper(); const values={height:.5,density:.5,forest:.5};
+let r=zoom.update([hand(.3,.5,true),hand(.7,.5,true)],0,values); assert.equal(r.zoomDelta,undefined); assert.equal(r.density,undefined);
+r=zoom.update([hand(.25,.5,true),hand(.75,.5,true)],50,values); assert(r.zoomDelta>0); assert.equal(r.density,undefined);
+r=zoom.update([hand(.3,.5,true),hand(.7,.5,true)],100,values); assert(r.zoomDelta<0);
+r=zoom.update([hand(.3,.5,false),hand(.7,.5,false)],150,values); assert.equal(r.zoomDelta,undefined); assert('density' in r);
+console.log('zoom and density separation checks passed');
