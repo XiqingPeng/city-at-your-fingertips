@@ -1,28 +1,36 @@
-# A City at Your Fingertips
+# A City at Your Fingertips · Pixel City Studio
 
-一个手势驱动的实时 3D 城市小样。用摄像头追踪双手，观察建筑生长、城市密度和森林比例的平滑变化；也可以先用滑块操作。
+An interactive 8-bit inspired city studio. Grow an imaginary city with hand gestures, or select a real neighborhood and build a model using OpenStreetMap data.
 
-## Windows 启动
+## Start
 
-双击本目录的 `启动城市Demo.cmd`，保持打开的命令窗口运行，然后在浏览器访问 http://localhost:8000。如果浏览器打开时服务尚未就绪，稍等几秒刷新页面。也可以在本目录打开 PowerShell，运行：
+On Windows, double-click `启动城市Demo.cmd`, or run this command in the project directory:
 
-```powershell
+```sh
 python -m http.server 8000 --bind 127.0.0.1
 ```
 
-在 Chrome 或 Edge 打开 http://localhost:8000，点击「开启摄像头」并允许访问。按 Ctrl+C 关闭服务。首次加载需要联网下载 Three.js、MediaPipe 的 JavaScript / WASM 和手部模型；当前版本没有离线资源。视频在浏览器本机处理，不上传到项目服务器。
+Open <http://localhost:8000> in Chrome or Edge. JavaScript libraries, fonts, the hand-tracking model, geocoding, map tiles, building footprints and elevation tiles require an internet connection.
 
-- 双手拉开或靠近：放大或缩小视角；双手一起上下左右移动：平移画面。城市密度使用滑块调整。
-- 单手张开向上推动：建筑逐渐升高，向下回摆不会抵消生长。
-- 捏合拇指和食指向下移动：降低建筑；保持捏合不动：森林逐渐恢复为城市。
-- 张手左右挥动：森林逐渐生长。也可以用滑块直接调整。
-- 鼠标拖动：旋转视角；滑轮：缩放。追踪丢失时保持最近值。
-- 手势范围是初始实验值，需要按摄像头位置、光照和体验反馈调整。
+## Shape your city
 
-## 技术与后续
+- Choose **HAND CONTROL** in the upper right, press **Start camera**, then grant browser permission. Camera frames are processed on your device and are not sent to the project server. Manual sliders remain available.
+- Move both hands apart or together to zoom, or move them together to pan. In the imaginary city, raise an open hand to grow buildings, pinch and move down to lower them, wave an open hand to grow a forest, and hold a pinch to restore the city. Real neighborhoods support view gestures and height adjustment. Values remain steady when tracking is lost.
+- Drag to orbit, scroll to zoom and right-drag to pan. Use the buttons to reset the view or look from above.
+- Switch **Daytime / Nighttime** for a bright pixel sky or a starry sky with warmer windows. Pick one of three city palettes.
 
-Three.js 通过 WebGL 绘制程序生成的几何城市；MediaPipe Hand Landmarker 提取手部关键点，优先尝试 GPU，失败后尝试 CPU。浏览器和系统决定使用哪张 GPU，不能仅凭显卡型号保证调用独显。手势到画面的映射是连续规则与平滑插值，目前**没有 Transformer**。后续可先采集经参与者同意的关键点时间序列，再评估时序 Transformer 对更复杂手势的帮助和延迟；不需要保存摄像头画面。
+## Real neighborhoods
 
-当前素材库包含八种自制程序化建筑轮廓和八种树形，地图为 42×42；没有包含第三方 3D 模型。未来引入模型前应核对许可证、署名要求、文件大小与可修改性，并保留来源记录。优化方向包括相机标定、手势滤波、森林向城市的自然逆转、资产替换和离线依赖。
+Search for a place and select a result. Drag the pin or click the map, or enter coordinates, then choose a square area from 0.5 to 4 km and click **Load selected area**. Larger selections request more features; public-service limits or network timeouts can prevent a request from completing. The model displays at most 1,800 buildings, sampled across the selection, and 5,000 road segments. Choose **Imaginary** to return to the procedural city.
 
-参考：[MediaPipe Hand Landmarker](https://developers.google.com/edge/mediapipe/solutions/vision/hand_landmarker/web_js)、[Three.js 安装](https://threejs.org/manual/pages/installation.html)。
+The **Relative elevation** option loads AWS Terrain Tiles / Mapzen data and makes a closed terrain base. Buildings and road segments are placed at sampled ground heights; roads and building footprints are not conformed continuously to steep terrain. Named OSM buildings and landmarks can be highlighted. A few recognized towers have original stylized models; other landmark points are shown as simple markers. Their geometry is illustrative, not a survey or a replacement for precise landmark models.
+
+Place search uses [Open-Meteo Geocoding](https://open-meteo.com/en/docs/geocoding-api). Map tiles, buildings and roads use [OpenStreetMap](https://www.openstreetmap.org/copyright) data, © OpenStreetMap contributors, fetched via public read-only Overpass services. Elevation uses [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/). Current map mode handles OSM building and road ways and named tower relations; full multipolygon buildings, water, automatic land-use and exact building heights are not implemented. Missing heights are estimated. Coverage and service availability vary by place.
+
+## Save and print
+
+**Save image** exports the scene as PNG. **Export STL** exports a single-color triangle mesh. **Export Color 3MF** exports 3MF Core with per-material colors and a default 160 mm base width. Its colors are model materials, not automatic assignments to physical filaments; assign those in a compatible slicer. The exporter welds duplicated vertices inside each mesh and scales the lowest point to the build plate. Meshes can still overlap, be disconnected or be too thin, and individual slicers may interpret colors differently. Inspect and repair the file in your slicer before printing; automated boolean union and printability guarantees are not provided.
+
+Three.js renders original procedural geometry. MediaPipe Hand Landmarker extracts hand landmarks, trying GPU first and falling back to CPU; the browser and system select the device. Gesture mapping uses continuous rules and smoothing, not a Transformer. Gesture thresholds are experimental and depend on camera position and lighting.
+
+Run the existing gesture checks with `node test-gestures.mjs`.
