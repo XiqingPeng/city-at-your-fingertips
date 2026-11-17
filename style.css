@@ -12,3 +12,6 @@ h1{font-family:"Press Start 2P",monospace;font-size:clamp(22px,2.2vw,36px);line-
 @media(max-width:420px){.brand strong{font-size:8px}.brand small{font-size:6px}.topbar{gap:8px}.help-toggle{padding:8px 6px;font-size:10px}}
 
 .cancel-load{margin-top:8px;padding:6px 10px;background:#fff8df;border:1px solid #a17842;color:#754d2a;font-size:10px}.cancel-load[hidden]{display:none}
+
+/* Indeterminate: map servers do not report a reliable percentage. */
+.map-progress{height:13px;margin:12px 0 2px;padding:2px;border:2px solid #42583c;background:#ead8a3;overflow:hidden}.map-progress[hidden]{display:none}.map-progress span{display:block;width:35%;height:100%;background:#d89722;box-shadow:inset 0 -2px #ad621c;animation:map-loading 1.35s steps(12,end) infinite}@keyframes map-loading{from{transform:translateX(-120%)}to{transform:translateX(300%)}}@media(prefers-reduced-motion:reduce){.map-progress span{animation:none;transform:translateX(95%)}}

@@ -113,7 +113,7 @@ export function setupStudio({scene, renderer, camera, controls, procedural, real
   let topView=false;$('#toggle-view').addEventListener('click',()=>{topView=!topView;controls.target.set(0,0,0);camera.position.set(topView?.01:37,topView?72:37,topView?.01:51);controls.update();$('#toggle-view span').textContent=topView?'3D view':'Top view';});
   $('#help-toggle').addEventListener('click',()=>{const help=$('#help');help.hidden=!help.hidden;$('#help-toggle').setAttribute('aria-expanded',String(!help.hidden));});
   $('#close-help').addEventListener('click',()=>{$('#help').hidden=true;$('#help-toggle').setAttribute('aria-expanded','false');});
-  function cancel(){requestId++;if(controller)controller.abort();controller=null;$('#cancel-load').hidden=true;terrainGeneration++;if(terrainController)terrainController.abort();}
+  function cancel(){requestId++;if(controller)controller.abort();controller=null;$('#cancel-load').hidden=true;$('#map-progress').hidden=true;terrainGeneration++;if(terrainController)terrainController.abort();}
   function boundsFor(place,km){const h=km/2/111.32,l=h/Math.max(.1,Math.cos(place.latitude*Math.PI/180));return [place.latitude-h,place.longitude-l,place.latitude+h,place.longitude+l];}
   function updateMap(){
     if(!selected)return;const [south,west,north,east]=boundsFor(selected,Number($('#area').value));
@@ -150,7 +150,7 @@ export function setupStudio({scene, renderer, camera, controls, procedural, real
   async function load() {
     if(!selected)return;cancel();const id=requestId;controller=new AbortController(); const place=selected, km=Number($('#area').value), halfLat=km/2/111.32, halfLon=halfLat/Math.max(.1,Math.cos(place.latitude*Math.PI/180));
     const bounds=boundsFor(place,km), bbox=bounds.join(',');
-    status.textContent='Loading the OpenStreetMap neighborhood. This may take a moment…';$('#cancel-load').hidden=false;
+    status.textContent='Loading the OpenStreetMap neighborhood. This may take a moment…';$('#map-progress').hidden=false;$('#cancel-load').hidden=false;
     try {
       const query=`[out:json][timeout:25];(way["building"](${bbox});way["highway"~"^(primary|secondary|tertiary|residential|unclassified|pedestrian|living_street)$"](${bbox});node["name"]["tourism"](${bbox});node["name"]["historic"](${bbox});nwr["man_made"="tower"]["name"](${bbox}););out tags geom;`;
       const key=bounds.map(n=>n.toFixed(6)).join(','),cached=osmCache.get(key);let raw;
@@ -187,7 +187,7 @@ export function setupStudio({scene, renderer, camera, controls, procedural, real
       }
       if(!buildings.length){dispose(next);status.textContent='No building footprints found. Try another place or area size.';return;}
       dispose(realRoot);realRoot.add(next);realBuildings=buildings;loadedPlace={...place,km};terrainData=null;landmarks=nextLandmarks.sort((a,b)=>Number(b.name.includes('(stylized model)'))-Number(a.name.includes('(stylized model)'))).slice(0,100);const select=$('#landmark');select.replaceChildren(new Option('None',''));for(const item of landmarks)select.add(new Option(item.name,item.id));$('#landmark-row').hidden=!landmarks.length;setMode(true);$('#scene-name').textContent=place.name+' · '+km+' km';status.textContent=`Loaded ${buildings.length} of ${allBuildings.length} buildings. Data © OpenStreetMap contributors. Missing heights are estimated.`;resetView();if($('#terrain').value==='terrain')applyTerrain();
-    }catch(error){if(id===requestId)status.textContent=error.name==='AbortError'?'Map request timed out or was cancelled. Retry or choose a smaller area.':'Map loading failed. Check your connection or try again later.';}finally{if(id===requestId)$('#cancel-load').hidden=true;}
+    }catch(error){if(id===requestId)status.textContent=error.name==='AbortError'?'Map request timed out or was cancelled. Retry or choose a smaller area.':'Map loading failed. Check your connection or try again later.';}finally{if(id===requestId){$('#map-progress').hidden=true;$('#cancel-load').hidden=true;}}
   }
   $('#snapshot').addEventListener('click',()=>{renderer.render(scene,camera);renderer.domElement.toBlob(blob=>{if(blob)download(blob,'pixel-city.png');else status.textContent='Could not save the image. Please try again.';},'image/png');});
   $('#export').addEventListener('click',async()=>{try{status.textContent='Preparing STL…';const {STLExporter}=await import('https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/exporters/STLExporter.js');const source=realRoot.visible?realRoot:procedural;const copy=source.clone(true);copy.traverse(o=>{for(const child of [...o.children])if(!child.visible)o.remove(child);});copy.rotation.x=Math.PI/2;copy.updateMatrixWorld(true);const data=new STLExporter().parse(copy,{binary:true});download(new Blob([data],{type:'model/stl'}),'pixel-city.stl');status.textContent='STL exported: about 42 units wide. Check and repair overlapping geometry in your slicer.';}catch(error){console.error(error);status.textContent='STL export failed. Check your connection and try again.';}});
