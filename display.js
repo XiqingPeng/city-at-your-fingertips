@@ -1,3 +1,5 @@
+import { setupGestureDemo } from './gesture-hint.js';
+
 const leafletUrl = 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet';
 
 function loadLeaflet() {
@@ -39,12 +41,17 @@ export function setupDisplay({ onPanelChange, onTourToggle }) {
       close: document.querySelector('#close-help')
     }
   };
+  const areaEditor = document.querySelector('#area-editor');
+  areaEditor.addEventListener('toggle', () => {
+    if (areaEditor.open) loadLeaflet();
+  });
   const sceneName = document.querySelector('#scene-name');
   const sceneDescription = document.querySelector('#scene-description');
   const tourButton = document.querySelector('#tour-toggle');
   const tourAction = document.querySelector('#tour-action');
   const tourNote = document.querySelector('#tour-note');
   const runningNote = tourNote.textContent;
+  const gestureDemo = setupGestureDemo();
   let activePanel = null;
 
   function showPanel(next) {
@@ -55,6 +62,8 @@ export function setupDisplay({ onPanelChange, onTourToggle }) {
     if (previous) {
       previous.element.hidden = true;
       previous.toggle.setAttribute('aria-expanded', 'false');
+      if (activePanel === 'map') areaEditor.open = false;
+      if (activePanel === 'hands') gestureDemo.stop();
     }
     activePanel = next;
     if (next) {
@@ -62,7 +71,8 @@ export function setupDisplay({ onPanelChange, onTourToggle }) {
       app.dataset.panel = next;
       panel.element.hidden = false;
       panel.toggle.setAttribute('aria-expanded', 'true');
-      if (next === 'map') loadLeaflet();
+      panel.element.querySelector('.panel-body').scrollTop = 0;
+      if (next === 'hands') gestureDemo.play();
       panel.close.focus({ preventScroll: true });
     } else {
       delete app.dataset.panel;

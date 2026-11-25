@@ -7,6 +7,7 @@ const TO_RAD = Math.PI / 180;
 const MAX_TILES = 20;
 const ROAD_CLASSES = new Set(['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'minor', 'service', 'pedestrian']);
 const LANDMARK_TYPES = new Set(['attraction', 'museum', 'viewpoint', 'artwork', 'tower', 'observation_tower', 'theme_park', 'monument', 'memorial', 'stadium', 'castle', 'park', 'lighthouse', 'aquarium']);
+const NAMED_TOWER_TYPES = new Set(['tower', 'observation_tower', 'attraction', 'monument']);
 const PRIORITY_NAMES = /^(marina bay sands|merlion|merlion park|shanghai tower|shanghai world financial center|the helix bridge)$/i;
 
 const tileX = longitude => (longitude + 180) / 360 * SIZE;
@@ -81,9 +82,12 @@ function appendTile(data, tile, coordinates) {
   eachFeature(tile, 'poi', coordinates, (geometry, properties, id) => {
     const name = named(properties);
     if (!name || geometry.type !== 'Point') return;
-    const tower = TOWER_NAMES.test(name) || /^(observation_)?tower$/.test(properties.subclass);
+    const types = [properties.class, properties.subclass];
+    const kind = properties.subclass || properties.class;
+    const tower = /^(observation_)?tower$/.test(kind) ||
+      (TOWER_NAMES.test(name) && NAMED_TOWER_TYPES.has(kind));
     const priority = tower || PRIORITY_NAMES.test(name);
-    if (!priority && ![properties.class, properties.subclass].some(type => LANDMARK_TYPES.has(type))) return;
+    if (!priority && !types.some(type => LANDMARK_TYPES.has(type))) return;
     data.landmarks.push({
       id, coordinates: geometry.coordinates, name, tower, rank: priority ? .1 : Number(properties.rank)
     });

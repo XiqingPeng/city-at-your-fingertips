@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
-  MAP_WIDTH, OSM_LICENSE, PRESETS, MapDataError, clipSegment, loadLiveArea, loadPreset, makeArea,
+  MAP_WIDTH, OSM_LICENSE, PRESETS, PRESET_LIMITS, MapDataError, clipSegment, loadLiveArea, loadPreset, makeArea,
   osmFeatures, prepareArea, withDeadline
 } from './map-data.mjs';
 import { tilesForArea, vectorFeatures } from './map-tiles.mjs';
@@ -192,31 +192,52 @@ test('vector catalog accepts a new official release path and rejects unfamiliar 
   }), { code: 'invalid' });
 });
 
-test('featured stops load same-origin, licensed, geographically distinct snapshots', async () => {
-  const distinct = new Set();
-  const expectedLandmarks = {
-    Tokyo: /Tokyo Tower|東京タワー/,
-    Shanghai: /东方明珠|Oriental Pearl|Shanghai Tower/,
-    Singapore: /Marina Bay Sands|Merlion/
+test('the six city choices load licensed local extracts for distinct neighborhoods', async () => {
+  const expected = {
+    Tokyo: { neighborhood: 'Shiba Park', landmark: /Tokyo Tower|東京タワー/ },
+    Shanghai: { neighborhood: 'Lujiazui', landmark: /东方明珠|Oriental Pearl|Shanghai Tower/ },
+    Singapore: { neighborhood: 'Marina Bay', landmark: /Marina Bay Sands|Merlion/ },
+    Paris: { neighborhood: 'Eiffel Tower', landmark: /^(Eiffel Tower|Tour Eiffel)$/i },
+    'New York': { neighborhood: 'Flatiron District', landmark: /^Flatiron Building$/ },
+    Venice: { neighborhood: 'Rialto Bridge', landmark: /^Bridge of Sighs$/ }
   };
-  for (const city of Object.keys(PRESETS)) {
+  assert.deepEqual(new Set(Object.keys(PRESETS)), new Set(Object.keys(expected)));
+  const areas = new Set(), footprints = new Set();
+  for (const [city, { neighborhood, landmark }] of Object.entries(expected)) {
     const { area: region, layout } = await loadPreset(city, undefined, async url => {
-      assert.equal(url.protocol, 'file:');
-      assert.ok(url.pathname.endsWith('/map-data/' + PRESETS[city].file));
+      assert.equal(url.href, new URL('./map-data/' + PRESETS[city].file, import.meta.url).href);
       return new Response(await readFile(url));
     });
+    assert.equal(region.place.name, city);
+    assert.equal(region.place.neighborhood, neighborhood);
     assert.equal(region.km, 2);
     assert.equal(layout.source.license, OSM_LICENSE);
     assert.match(layout.source.attribution, /OpenFreeMap.*OpenMapTiles.*OpenStreetMap/);
-    assert.ok(layout.source.urls.every(url => url.startsWith('https://tiles.openfreemap.org/')));
-    assert.ok(layout.buildings.length > 500 && layout.buildings.length <= 1300);
-    assert.ok(layout.roads.length > 1000 && layout.water.length > 0);
-    assert.ok(layout.landmarks.some(entry => expectedLandmarks[city].test(entry.name)));
+    assert.ok(layout.source.urls.length > 0 && layout.source.urls.every(url => url.startsWith('https://tiles.openfreemap.org/')));
+    assert.ok(layout.buildings.length > 500 && layout.buildings.length <= PRESET_LIMITS.buildings, city + ' has usable footprints');
+    assert.ok(layout.roads.length > 1000 && layout.roads.length <= PRESET_LIMITS.roads, city + ' has usable streets');
+    if (city !== 'New York') assert.ok(layout.water.length > 0, city + ' includes mapped water');
+    assert.ok(layout.landmarks.some(entry => landmark.test(entry.name)), city + ' includes its expected landmark');
     for (const feature of [...layout.buildings, ...layout.water]) for (const ring of feature.rings) ring.forEach(verifyPoint);
     for (const entry of layout.roads) entry.line.forEach(verifyPoint);
-    distinct.add(JSON.stringify(layout.buildings.slice(0, 10).map(building => building.rings)));
+    areas.add(region.key);
+    footprints.add(JSON.stringify(layout.buildings.slice(0, 10).map(building => building.rings)));
   }
-  assert.equal(distinct.size, Object.keys(PRESETS).length);
+  assert.equal(areas.size, Object.keys(expected).length);
+  assert.equal(footprints.size, Object.keys(expected).length);
+});
+
+test('Shanghai places the Oriental Pearl Tower at its footprint', async () => {
+  const { layout } = await loadPreset('Shanghai', undefined, async url => new Response(await readFile(url)));
+  const towers = layout.landmarks.filter(entry => /^(Oriental Pearl Tower|东方明珠(?:广播电视塔)?)$/i.test(entry.name));
+  assert.equal(towers.length, 1);
+  const [tower] = towers;
+  assert.equal(tower.name, 'Oriental Pearl Tower');
+  assert.equal(tower.tower, true);
+  assert.match(tower.id, /\/building\/5242706412$/);
+  const footprint = layout.buildings.find(entry => entry.id === tower.id);
+  assert.equal(footprint?.height, 468);
+  assert.deepEqual(tower.point, footprint.anchor);
 });
 
 test('a preset for another square is rejected before scene construction', async () => {

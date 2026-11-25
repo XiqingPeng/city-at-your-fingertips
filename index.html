@@ -21,6 +21,7 @@
     <div class="workspace">
       <main class="exhibit" aria-labelledby="scene-name">
         <div id="scene" role="region" aria-label="Interactive 3D city">
+          <div id="hand-hint" hidden><span id="hand-hint-text"></span></div>
           <div id="scene-attribution" hidden>
             © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a>
             <span id="tile-attribution" hidden> · <a href="https://openmaptiles.org/" target="_blank" rel="noopener noreferrer">© OpenMapTiles</a></span>
@@ -48,38 +49,31 @@
         </header>
         <div class="panel-body">
           <section class="control-section">
-            <h3>Pick a place</h3>
-            <form id="search-form" class="search">
-              <label class="sr-only" for="city-search">Search for a city or place</label>
-              <input id="city-search" type="search" placeholder="City or place" autocomplete="off">
-              <button type="submit">Search</button>
-            </form>
-            <div id="search-results" class="results" aria-live="polite"></div>
-            <div class="chips">
-              <button type="button" data-city="Shanghai">Shanghai</button>
-              <button type="button" data-city="Tokyo">Tokyo</button>
-              <button type="button" data-city="Singapore">Singapore</button>
-              <button type="button" id="imaginary">Back to tour</button>
-            </div>
-            <div class="field-row">
-              <label for="area">Area size</label>
-              <select id="area">
-                <option value="0.5">0.5 × 0.5 km</option>
-                <option value="1">1 × 1 km</option>
-                <option value="2" selected>2 × 2 km</option>
-                <option value="4">4 × 4 km</option>
-              </select>
-            </div>
-            <div id="area-editor" hidden>
-              <p class="muted">Drag the pin or click the map to position your square.</p>
-              <div id="selection-map" aria-label="Map for choosing a neighborhood"></div>
+            <h3 id="places-title">Pick a city</h3>
+            <div id="city-options" class="city-options" role="group" aria-labelledby="places-title"></div>
+            <details id="area-editor">
+              <summary>Adjust map area</summary>
+              <div class="field-row">
+                <label for="area">Area size</label>
+                <select id="area">
+                  <option value="0.5">0.5 × 0.5 km</option>
+                  <option value="1">1 × 1 km</option>
+                  <option value="2" selected>2 × 2 km</option>
+                  <option value="4">4 × 4 km</option>
+                </select>
+              </div>
+              <div id="selection-preview" hidden>
+                <p class="muted">Click the map or drag the pin to position the square.</p>
+                <div id="selection-map" aria-label="Map for choosing a neighborhood"></div>
+              </div>
               <div class="coordinates">
                 <label>Latitude <input id="latitude" type="number" min="-85" max="85" step="0.00001"></label>
                 <label>Longitude <input id="longitude" type="number" min="-180" max="180" step="0.00001"></label>
               </div>
               <button id="load-area" class="primary" type="button">Load selected area</button>
-            </div>
-            <p class="attribution">Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a> · Geocoding by Open-Meteo</p>
+            </details>
+            <button type="button" id="imaginary">Back to tour</button>
+            <p class="attribution">Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a></p>
           </section>
 
           <section class="control-section">
@@ -133,9 +127,9 @@
             <p class="muted">3MF preserves model colors. Assign filaments and inspect overlapping meshes in your slicer before printing.</p>
           </section>
         </div>
-        <footer class="panel-status">
+        <footer class="panel-status" hidden>
           <div id="map-progress" class="map-progress" role="progressbar" aria-label="Loading map data" aria-describedby="map-status" hidden><span></span></div>
-          <p id="map-status" class="notice" role="status">Search for a place to load its neighborhood.</p>
+          <p id="map-status" class="notice" role="status"></p>
           <button id="cancel-load" class="cancel-load" type="button" hidden>Cancel loading</button>
         </footer>
       </aside>
@@ -146,20 +140,48 @@
           <button id="close-help" class="close-panel" type="button" aria-label="Close hand controls">×</button>
         </header>
         <div class="panel-body help-body">
-          <p id="camera-instructions">Start the camera to use hand gestures. Camera frames stay on this device.</p>
+          <p id="camera-instructions">Camera frames stay on this device.</p>
           <button id="camera" class="primary" type="button" aria-describedby="camera-instructions">Start camera</button>
           <p id="status" class="notice" role="status">Manual mode</p>
+          <section class="gesture-guide">
+            <div class="gesture-guide-head">
+              <h3>Lift the skyline</h3>
+              <button id="gesture-replay" type="button">Replay</button>
+            </div>
+            <svg id="gesture-demo" viewBox="0 0 168 64" aria-hidden="true" shape-rendering="crispEdges">
+              <path fill="#bceaf5" d="M0 0h168v64H0z"/>
+              <path fill="#fffcf2" d="M9 14h8v-4h13v4h9v5H9zm121-4h7V6h13v4h8v5h-28z"/>
+              <path fill="#bcda93" d="M0 52h168v12H0z"/>
+              <path fill="#99ba73" d="M0 60h168v4H0z"/>
+              <path fill="#70a399" d="M17 48h18v9H17zm71 2h11v7H88z"/>
+              <g class="gesture-demo-building">
+                <path fill="#203239" d="M48 21h8v-5h29v39H48z"/>
+                <path fill="#fff1af" d="M54 23h22l6-4H60z"/>
+                <path fill="#ecad59" d="M51 25h26v27H51z"/>
+                <path fill="#cd804b" d="M77 25l5-3v30h-5z"/>
+                <path fill="#5c5c59" d="M55 28h5v6h-5zm10 0h5v6h-5zm-10 9h5v6h-5zm10 0h5v6h-5zm0 9h5v6h-5z"/>
+              </g>
+              <g transform="translate(92 14)">
+                <g class="gesture-demo-hand" stroke="#203239" stroke-width="1.5">
+                  <path fill="#f9c593" d="M2 8h17l5-4h7v3l-3 3h15v1h9v9h-9v-2H26l-8-3H7v-2H4v-2H2z"/>
+                  <path fill="#d69366" stroke="none" d="M8 13h12l7 3h16v1H26l-8-3H8z"/>
+                  <path fill="none" stroke-width="1" d="M5 10h14m-9 3h10l5 2"/>
+                  <path fill="#74aaa7" d="M44 11h8v9h-8z"/>
+                </g>
+              </g>
+              <path fill="#345b53" d="M153 21h3v3h3v3h-3v14h3v3h-3v3h-3v-3h-3v-3h3V27h-3v-3h3z"/>
+            </svg>
+            <ol class="gesture-steps">
+              <li>Hold one hand flat, with your palm slightly toward the camera. Lift in short, repeated strokes to grow buildings.</li>
+              <li>Let your hand come back down between lifts.</li>
+              <li>Pause, then press down to lower buildings. Hold still to stop.</li>
+            </ol>
+          </section>
           <div class="preview">
             <video id="video" autoplay playsinline muted></video>
             <canvas id="hands"></canvas>
             <span id="preview-label">Camera is off</span>
           </div>
-          <ul>
-            <li>Move your hands apart or together to zoom. Move both hands to pan.</li>
-            <li>Raise an open hand to grow buildings. Pinch and move down to lower them.</li>
-            <li>Wave an open hand to grow a forest. Hold a pinch to restore the city.</li>
-          </ul>
-          <p class="muted">Map neighborhoods support view gestures and height adjustment.</p>
         </div>
       </aside>
     </div>

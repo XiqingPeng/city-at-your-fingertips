@@ -223,9 +223,12 @@ onVisibility();
 
 let lastHands = null;
 const trackHands = setupHandControls({
-  camera, controls, target,
-  setTarget(key, value) { if (!sliders[key].input.disabled) setTarget(key, value); },
-  onHands(now) {
+  getHeight: () => current.height,
+  setHeight(height) {
+    setTarget('height', height);
+    current.height = target.height;
+  },
+  onMovement(now) {
     if (lastHands === null) hold('hands', true);
     lastHands = now;
     if (panel === 'hands') lastPanelActivity = now;

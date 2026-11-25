@@ -2,12 +2,15 @@ export const MAP_WIDTH = 40;
 export const BASE_WIDTH = 42;
 export const OSM_LICENSE = 'https://opendatacommons.org/licenses/odbl/1-0/';
 export const OSM_ATTRIBUTION = '© OpenStreetMap contributors';
-export const TOWER_NAMES = /^(tokyo tower|東京タワー|东京塔|东方明珠(广播电视塔)?|東方明珠(廣播電視塔)?|oriental pearl( radio( and| &)? (tv|television))? tower|eiffel tower|tour eiffel|埃菲尔铁塔|cn tower|tour cn)$/i;
+export const TOWER_NAMES = /^(tokyo tower|東京タワー|东京塔|东方明珠((广播)?电视塔)?|東方明珠((廣播)?電視塔)?|oriental pearl( radio( and| &)? (tv|television))? tower|eiffel tower|tour eiffel|埃菲尔铁塔|cn tower|tour cn)$/i;
 
 export const PRESETS = Object.freeze({
   Tokyo: Object.freeze({ name: 'Tokyo', neighborhood: 'Shiba Park', latitude: 35.6586, longitude: 139.7454, km: 2, file: 'tokyo.json' }),
   Shanghai: Object.freeze({ name: 'Shanghai', neighborhood: 'Lujiazui', latitude: 31.238, longitude: 121.5006, km: 2, file: 'shanghai.json' }),
-  Singapore: Object.freeze({ name: 'Singapore', neighborhood: 'Marina Bay', latitude: 1.2833, longitude: 103.855, km: 2, file: 'singapore.json' })
+  Singapore: Object.freeze({ name: 'Singapore', neighborhood: 'Marina Bay', latitude: 1.2833, longitude: 103.855, km: 2, file: 'singapore.json' }),
+  Paris: Object.freeze({ name: 'Paris', neighborhood: 'Eiffel Tower', latitude: 48.85837, longitude: 2.29448, km: 2, file: 'paris.json' }),
+  'New York': Object.freeze({ name: 'New York', neighborhood: 'Flatiron District', latitude: 40.74104, longitude: -73.9897, km: 2, file: 'new-york.json' }),
+  Venice: Object.freeze({ name: 'Venice', neighborhood: 'Rialto Bridge', latitude: 45.43793, longitude: 12.33599, km: 2, file: 'venice.json' })
 });
 
 const DEGREES = 180 / Math.PI;

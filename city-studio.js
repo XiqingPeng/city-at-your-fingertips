@@ -74,13 +74,15 @@ function creditImage(source, credit) {
 
 export function setupStudio({ scene, renderer, camera, controls, procedural, realRoot, ground, roadMat, current, dayNight, onSceneChange }) {
   const status = $('#map-status');
+  const statusFooter = status.closest('.panel-status');
+  const progressBar = $('#map-progress');
+  const presets = Object.entries(PRESETS);
   const areaEditor = $('#area-editor');
   const latitudeField = $('#latitude');
   const longitudeField = $('#longitude');
   const areaField = $('#area');
+  const selectionPreview = $('#selection-preview');
   const selectionMap = $('#selection-map');
-  const searchField = $('#city-search');
-  const results = $('#search-results');
   const terrainField = $('#terrain');
   const landmarkField = $('#landmark');
   const originals = new Map();
@@ -98,11 +100,13 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
 
   function setStatus(message) {
     status.textContent = message;
+    statusFooter.hidden = !message && progressBar.hidden;
     return ++statusVersion;
   }
 
   function setBusy(busy) {
-    $('#map-progress').hidden = !busy;
+    progressBar.hidden = !busy;
+    statusFooter.hidden = !busy && !status.textContent;
     $('#cancel-load').hidden = !busy;
   }
 
@@ -141,7 +145,7 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
     }
     $('#mode-hint').textContent = isReal
       ? 'Adjust the height of the buildings in this map area.'
-      : 'Use sliders or gestures to shape the current neighborhood.';
+      : 'Adjust the height, building density and tree cover.';
     $('#scene-kind').textContent = isReal ? 'OPENSTREETMAP' : 'GENERATED';
     const sceneAttribution = $('#scene-attribution');
     if (sceneAttribution) sceneAttribution.hidden = !isReal;
@@ -164,12 +168,12 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
     mapJob = null;
     previous.controller.abort();
     setBusy(false);
-    if (previous.source === 'manual') setStatus(previous.kind === 'search' ? 'Place search cancelled.' : 'Map loading cancelled.');
+    if (previous.source === 'manual') setStatus('Map loading cancelled.');
   }
 
-  function beginMapJob(source, kind) {
+  function beginMapJob(source) {
     cancelMapLoad();
-    const next = { source, kind, controller: new AbortController() };
+    const next = { source, controller: new AbortController() };
     mapJob = next;
     setBusy(source === 'manual');
     return next;
@@ -220,12 +224,13 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
 
   function refreshMap() {
     const Leaflet = window.L;
-    selectionMap.hidden = !selected || !Leaflet;
-    if (!selected || !Leaflet || !selectionMap.clientWidth) return;
+    if (!areaEditor.open || !Leaflet) return;
+    selectionPreview.hidden = false;
+    if (!selectionMap.clientWidth) return;
     const [south, west, north, east] = makeArea(selected, Number(areaField.value)).bounds;
     const center = [selected.latitude, selected.longitude];
     if (!map) {
-      map = Leaflet.map(selectionMap, { scrollWheelZoom: false }).setView(center, 15);
+      map = Leaflet.map(selectionMap, { scrollWheelZoom: false });
       Leaflet.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>'
       }).addTo(map);
@@ -293,15 +298,14 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
     terrainField.value = 'flat';
     setMode(false);
     if (source === 'manual') {
-      results.replaceChildren();
-      setStatus('Choose a place or enter coordinates to explore a map.');
+      setStatus('');
       resetView();
     }
     onSceneChange?.({ kind: 'generated', source });
   }
 
   async function showMap({ area, city, source = 'manual', beforeCommit }) {
-    const job = beginMapJob(source, 'load');
+    const job = beginMapJob(source);
     const signal = job.controller.signal;
     const progress = message => {
       if (mapJob === job && source === 'manual') setStatus(message);
@@ -344,12 +348,7 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
       resetView();
       const place = area.place;
       const name = place.neighborhood ? place.name + ' · ' + place.neighborhood : place.name;
-      if (source === 'manual') {
-        const coverage = model.buildingCount === layout.buildingCount ? model.buildingCount :
-          model.buildingCount + ' of ' + layout.buildingCount;
-        const origin = city ? 'Saved map extract (' + layout.source.timestamp + '). ' : '';
-        setStatus(origin + area.km + ' × ' + area.km + ' km · ' + coverage + ' footprints. Some heights are estimated.');
-      }
+      if (source === 'manual') setStatus('');
       finishMapJob(job);
       if (terrainField.value === 'terrain') applyTerrain();
       change = { kind: 'map', source, name, place, km: area.km };
@@ -365,52 +364,6 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
     }
     if (change) onSceneChange?.(change);
     return Boolean(change);
-  }
-
-  async function search(query) {
-    results.replaceChildren();
-    if (!query.trim()) {
-      cancelMapLoad();
-      setStatus('Enter a city or place name.');
-      return;
-    }
-    const job = beginMapJob('manual', 'search');
-    setStatus('Searching for places…');
-    try {
-      const parameters = new URLSearchParams({ name: query.trim(), count: '6', language: 'en', format: 'json' });
-      const data = await withDeadline(job.controller.signal, 6000, async signal => {
-        const response = await fetch('https://geocoding-api.open-meteo.com/v1/search?' + parameters, { signal });
-        if (!response.ok) throw new Error('Geocoder HTTP ' + response.status);
-        return response.json();
-      });
-      if (mapJob !== job) return;
-      const places = (data.results || []).filter(place => Number.isFinite(place.latitude) &&
-        Number.isFinite(place.longitude) && Math.abs(place.latitude) <= 85 && Math.abs(place.longitude) <= 180);
-      if (!places.length) {
-        setStatus('No places found. Try another name or enter coordinates.');
-        return;
-      }
-      setStatus('Select a search result, then place and load the square.');
-      for (const place of places) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.textContent = [...new Set([place.name, place.admin1, place.country].filter(Boolean))].join(' · ');
-        button.addEventListener('click', () => {
-          cancelMapLoad();
-          setSelection({ name: place.name, latitude: place.latitude, longitude: place.longitude });
-          results.replaceChildren();
-          setStatus('Move the pin or adjust the area size, then load the selected area.');
-          $('#load-area').focus();
-        });
-        results.append(button);
-      }
-    } catch (error) {
-      if (mapJob === job) setStatus(error.code === 'timeout'
-        ? 'Place search timed out. Try again or enter coordinates.'
-        : 'Place search is unavailable. Try again or enter coordinates.');
-    } finally {
-      finishMapJob(job);
-    }
   }
 
   document.querySelectorAll('[data-palette]').forEach(button =>
@@ -441,26 +394,27 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
   });
   $('#imaginary').addEventListener('click', () => showGenerated());
   $('#cancel-load').addEventListener('click', cancelMapLoad);
-  $('#search-form').addEventListener('submit', event => {
-    event.preventDefault();
-    search(searchField.value);
-  });
-  searchField.addEventListener('input', () => {
-    if (mapJob?.kind === 'search') {
-      cancelMapLoad();
-      setStatus('Search for a place or enter coordinates.');
-    }
-    results.replaceChildren();
-  });
-  document.querySelectorAll('[data-city]').forEach(button => button.addEventListener('click', () => {
-    const city = button.dataset.city, preset = PRESETS[city];
-    if (!preset) return;
-    results.replaceChildren();
-    searchField.value = '';
-    areaField.value = String(preset.km);
-    setSelection(preset);
-    showMap({ city });
-  }));
+  const cityOptions = $('#city-options');
+  for (const [index, [city, preset]] of presets.entries()) {
+    const name = document.createElement('strong');
+    name.id = 'city-name-' + index;
+    name.textContent = preset.name;
+    const neighborhood = document.createElement('span');
+    neighborhood.id = 'city-neighborhood-' + index;
+    neighborhood.textContent = preset.neighborhood;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.setAttribute('aria-labelledby', name.id);
+    button.setAttribute('aria-describedby', neighborhood.id);
+    button.append(name, neighborhood);
+    button.addEventListener('click', () => {
+      areaEditor.open = false;
+      areaField.value = String(preset.km);
+      setSelection(preset);
+      showMap({ city });
+    });
+    cityOptions.append(button);
+  }
   areaField.addEventListener('change', () => {
     cancelMapLoad();
     refreshMap();
@@ -487,7 +441,7 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
     try {
       const area = inputArea();
       const { latitude, longitude } = area.place;
-      const featured = Object.entries(PRESETS).find(([, preset]) =>
+      const featured = presets.find(([, preset]) =>
         preset.latitude === latitude && preset.longitude === longitude && preset.km === area.km);
       setSelection(area.place);
       showMap({ area, city: featured?.[0] });
@@ -498,8 +452,9 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
   });
 
   new ResizeObserver(() => {
-    if (map && selectionMap.clientWidth) map.invalidateSize({ pan: false });
+    if (areaEditor.open && map && selectionMap.clientWidth) map.invalidateSize({ pan: false });
   }).observe(selectionMap);
+  areaEditor.addEventListener('toggle', refreshMap);
   window.addEventListener('leaflet-ready', refreshMap);
 
   const attribution = () => model ? model.layout.source.attribution + ' · openstreetmap.org/copyright' : '';
@@ -551,8 +506,9 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
     }
   });
 
-  areaEditor.hidden = false;
-  selectionMap.hidden = true;
+  const [, firstPreset] = presets[0];
+  areaField.value = String(firstPreset.km);
+  setSelection(firstPreset);
   applyPalette('harvest');
   setMode(false);
   return {

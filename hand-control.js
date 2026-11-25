@@ -1,9 +1,8 @@
-import * as THREE from 'three';
 import { createGestureMapper } from './gesture.js';
 
 // Two official GCS addresses serve the same versioned model. Some venue
 // networks can reach the bucket hostname while failing DNS for the shared host.
-const modelPath = 'hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+const modelPath = 'gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task';
 const modelUrls = [
   'https://mediapipe-models.storage.googleapis.com/' + modelPath,
   'https://storage.googleapis.com/mediapipe-models/' + modelPath
@@ -23,7 +22,7 @@ async function downloadModel(signal) {
       const response = await fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]) });
       if (!response.ok) throw new Error('Hand model HTTP ' + response.status);
       const model = new Uint8Array(await response.arrayBuffer());
-      if (model.length !== 7_819_105) throw new Error('Incomplete hand model.');
+      if (model.length !== 8_373_440) throw new Error('Incomplete hand model.');
       return model;
     } catch (error) {
       lastError = error;
@@ -32,12 +31,23 @@ async function downloadModel(signal) {
   throw lastError;
 }
 
-export function setupHandControls({ camera, controls, target, setTarget, onHands }) {
+const hints = {
+  idle: 'Show one open, flat hand.',
+  ready: 'Lift to grow. Press down to lower.',
+  lifting: 'Lift again to grow. Pause to change direction.',
+  lowering: 'Press again to lower. Pause to change direction.',
+  rest: 'Open your hand and hold it flat.',
+  ambiguous: 'Show one hand at a time.'
+};
+
+export function setupHandControls({ getHeight, setHeight, onMovement }) {
   const button = document.querySelector('#camera');
   const status = document.querySelector('#status');
   const video = document.querySelector('#video');
   const canvas = document.querySelector('#hands');
   const label = document.querySelector('#preview-label');
+  const hint = document.querySelector('#hand-hint');
+  const hintText = document.querySelector('#hand-hint-text');
   const ctx = canvas.getContext('2d');
   const mapper = createGestureMapper();
   let tracker = null;
@@ -45,6 +55,14 @@ export function setupHandControls({ camera, controls, target, setTarget, onHands
   let lastVideo = -1;
   let session = null;
   let running = false;
+
+  function showHint(state) {
+    if (!hint.hidden && hint.dataset.state === state) return;
+    hint.dataset.state = state;
+    hint.hidden = false;
+    hintText.textContent = hints[state];
+    status.textContent = hints[state];
+  }
 
   function stop(message = 'Camera is off.') {
     session?.abort();
@@ -54,6 +72,7 @@ export function setupHandControls({ camera, controls, target, setTarget, onHands
     stream = null;
     video.srcObject = null;
     mapper.reset();
+    hint.hidden = true;
     lastVideo = -1;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     label.style.display = '';
@@ -62,7 +81,7 @@ export function setupHandControls({ camera, controls, target, setTarget, onHands
   }
 
   async function handTracker(signal) {
-    const { HandLandmarker, FilesetResolver } = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/+esm');
+    const { GestureRecognizer, FilesetResolver } = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/+esm');
     const [vision, bytes] = await Promise.all([
       FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm'),
       downloadModel(signal)
@@ -77,11 +96,11 @@ export function setupHandControls({ camera, controls, target, setTarget, onHands
       numHands: 2
     };
     try {
-      return await HandLandmarker.createFromOptions(vision, options);
+      return await GestureRecognizer.createFromOptions(vision, options);
     } catch {
       signal.throwIfAborted();
       options.baseOptions.delegate = 'CPU';
-      return HandLandmarker.createFromOptions(vision, options);
+      return GestureRecognizer.createFromOptions(vision, options);
     }
   }
 
@@ -128,7 +147,7 @@ export function setupHandControls({ camera, controls, target, setTarget, onHands
       running = true;
       label.style.display = 'none';
       button.textContent = 'Stop camera';
-      status.textContent = 'Show your hands to the camera.';
+      showHint('idle');
     } catch (error) {
       if (signal.aborted) return;
       stop(stream
@@ -138,15 +157,12 @@ export function setupHandControls({ camera, controls, target, setTarget, onHands
   });
   window.addEventListener('pagehide', () => stop());
 
-  const offset = new THREE.Vector3(), up = new THREE.Vector3(), right = new THREE.Vector3();
-  const next = new THREE.Vector3(), shift = new THREE.Vector3();
-
   function track(now) {
     if (!running || video.readyState < 2 || video.currentTime === lastVideo) return;
     lastVideo = video.currentTime;
     try {
-      const hands = tracker.detectForVideo(video, now).landmarks;
-      if (hands.length) onHands(now);
+      const result = tracker.recognizeForVideo(video, now);
+      const hands = result.landmarks;
       if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
@@ -158,30 +174,16 @@ export function setupHandControls({ camera, controls, target, setTarget, onHands
         ctx.arc(point.x * canvas.width, point.y * canvas.height, 4, 0, Math.PI * 2);
         ctx.fill();
       }
-      const mapped = mapper.update(hands, now, target);
-      if (status.textContent !== mapped.gesture) status.textContent = mapped.gesture;
-      for (const key of ['height', 'forest', 'density']) if (key in mapped) setTarget(key, mapped[key]);
-      if (mapped.zoomDelta !== undefined) {
-        offset.copy(camera.position).sub(controls.target);
-        const distance = THREE.MathUtils.clamp(offset.length() * Math.exp(-mapped.zoomDelta * 1.8), controls.minDistance, controls.maxDistance);
-        camera.position.copy(controls.target).add(offset.setLength(distance));
-      }
-      if (mapped.panDelta) {
-        const scale = camera.position.distanceTo(controls.target) * 1.2;
-        right.set(1, 0, 0).applyQuaternion(camera.quaternion).multiplyScalar(mapped.panDelta.x * scale);
-        up.set(0, 1, 0).applyQuaternion(camera.quaternion).multiplyScalar(mapped.panDelta.y * scale);
-        shift.copy(right).add(up);
-        next.copy(controls.target).add(shift);
-        next.x = THREE.MathUtils.clamp(next.x, -25, 25);
-        next.y = THREE.MathUtils.clamp(next.y, -10, 18);
-        next.z = THREE.MathUtils.clamp(next.z, -25, 25);
-        shift.copy(next).sub(controls.target);
-        controls.target.add(shift);
-        camera.position.add(shift);
-      }
+      const mapped = mapper.update(result, now, getHeight());
+      showHint(mapped.state);
+      if (mapped.height !== undefined) setHeight(mapped.height);
+      if (mapped.state === 'lifting' || mapped.state === 'lowering') onMovement(now);
     } catch (error) {
       console.error(error);
       stop('Tracking stopped. Start the camera again to retry.');
+      const failed = tracker;
+      tracker = null;
+      failed?.close();
     }
   }
   return track;
