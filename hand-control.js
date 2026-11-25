@@ -9,6 +9,12 @@ const modelUrls = [
   'https://storage.googleapis.com/mediapipe-models/' + modelPath
 ];
 
+const cameraErrors = {
+  NotAllowedError: 'Camera permission was declined. You can keep watching or use the sliders.',
+  NotFoundError: 'No camera found. Connect one and try again, or use the sliders.',
+  NotReadableError: 'Could not read the camera. Check the device or close other apps using it, then try again.'
+};
+
 async function downloadModel(signal) {
   let lastError;
   for (const url of modelUrls) {
@@ -37,13 +43,13 @@ export function setupHandControls({ camera, controls, target, setTarget, onHands
   let tracker = null;
   let stream = null;
   let lastVideo = -1;
-  let session = 0;
-  let startup = null;
+  let session = null;
+  let running = false;
 
   function stop(message = 'Camera is off.') {
-    session++;
-    startup?.abort();
-    startup = null;
+    session?.abort();
+    session = null;
+    running = false;
     stream?.getTracks().forEach(track => track.stop());
     stream = null;
     video.srcObject = null;
@@ -52,7 +58,6 @@ export function setupHandControls({ camera, controls, target, setTarget, onHands
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     label.style.display = '';
     button.textContent = 'Start camera';
-    button.disabled = false;
     status.textContent = message;
   }
 
@@ -81,41 +86,54 @@ export function setupHandControls({ camera, controls, target, setTarget, onHands
   }
 
   button.addEventListener('click', async () => {
-    if (stream) { stop(); return; }
-    const id = ++session;
+    if (session) {
+      stop(running ? 'Camera is off.' : 'Camera start canceled.');
+      return;
+    }
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices?.getUserMedia) {
+      stop('Camera access is unavailable in this browser. You can use the sliders.');
+      return;
+    }
     const request = new AbortController();
-    startup = request;
-    button.disabled = true;
+    const { signal } = request;
+    session = request;
+    button.textContent = 'Cancel start';
+    status.textContent = 'Waiting for camera access…';
     try {
-      status.textContent = 'Waiting for camera access…';
-      const acquired = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
-      if (id !== session) { acquired.getTracks().forEach(track => track.stop()); return; }
+      const acquired = await mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
+      // The browser permission request can still resolve after the page cancels it.
+      if (signal.aborted) {
+        acquired.getTracks().forEach(track => track.stop());
+        return;
+      }
       stream = acquired;
-      button.disabled = false;
-      button.textContent = 'Cancel start';
+      const videoTrack = acquired.getVideoTracks()[0];
+      const onCameraEnded = () => stop('Camera disconnected. Start it again or use the sliders.');
+      if (!videoTrack || videoTrack.readyState === 'ended') {
+        onCameraEnded();
+        return;
+      }
+      videoTrack.addEventListener('ended', onCameraEnded, { once: true, signal });
       status.textContent = 'Starting hand tracking…';
       // On a restart the existing tracker can process the new local video.
       if (!tracker) {
-        const ready = await handTracker(request.signal);
-        if (id !== session) { ready.close(); return; }
+        const ready = await handTracker(signal);
+        if (signal.aborted) { ready.close(); return; }
         tracker = ready;
       }
-      if (id !== session) return;
       video.srcObject = stream;
       await video.play();
-      if (id !== session) return;
-      mapper.reset();
-      lastVideo = -1;
+      if (signal.aborted) return;
+      running = true;
       label.style.display = 'none';
       button.textContent = 'Stop camera';
       status.textContent = 'Show your hands to the camera.';
     } catch (error) {
-      if (id !== session) return;
-      stop(error.name === 'NotAllowedError'
-        ? 'Camera permission was declined. You can keep watching or use the sliders.'
-        : 'Could not start hand tracking. Check camera access and your connection.');
-    } finally {
-      if (id === session) { startup = null; button.disabled = false; }
+      if (signal.aborted) return;
+      stop(stream
+        ? 'Could not start hand tracking. Check your connection and try again, or use the sliders.'
+        : cameraErrors[error.name] ?? 'Could not access the camera. Try again or use the sliders.');
     }
   });
   window.addEventListener('pagehide', () => stop());
@@ -124,7 +142,7 @@ export function setupHandControls({ camera, controls, target, setTarget, onHands
   const next = new THREE.Vector3(), shift = new THREE.Vector3();
 
   function track(now) {
-    if (!stream || !tracker || video.readyState < 2 || video.currentTime === lastVideo) return;
+    if (!running || video.readyState < 2 || video.currentTime === lastVideo) return;
     lastVideo = video.currentTime;
     try {
       const hands = tracker.detectForVideo(video, now).landmarks;

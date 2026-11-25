@@ -232,9 +232,23 @@ const trackHands = setupHandControls({
   }
 });
 let previousFrame = null;
+let graphicsLost = false;
+renderer.domElement.addEventListener('webglcontextlost', event => {
+  event.preventDefault();
+  graphicsLost = true;
+  dissolve?.cancel();
+  hold('graphics', true);
+});
+renderer.domElement.addEventListener('webglcontextrestored', () => {
+  graphicsLost = false;
+  previousFrame = null;
+  notePanelActivity();
+  hold('graphics', false);
+});
+
 function animate(now) {
   requestAnimationFrame(animate);
-  if (document.hidden) { previousFrame = null; return; }
+  if (document.hidden || graphicsLost) { previousFrame = null; return; }
   const dt = previousFrame === null ? 0 : Math.min((now - previousFrame) / 1000, 0.1);
   previousFrame = now;
   trackHands(now);

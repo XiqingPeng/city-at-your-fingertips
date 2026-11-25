@@ -85,6 +85,7 @@ a { color: #124967; }
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: var(--gap);
 }
 
@@ -192,6 +193,22 @@ body[data-time="night"] #scene { background: #1b318e; }
   pointer-events: none;
 }
 
+#graphics-notice {
+  max-width: min(390px, calc(100% - 32px));
+  padding: 20px;
+  border: 3px solid var(--ink);
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 3px 4px 0 var(--shadow);
+}
+
+#graphics-notice h2 {
+  margin: 0;
+  font: 13px/1.6 var(--pixel-font);
+}
+
+#graphics-notice::backdrop { background: rgb(22 30 40 / 68%); }
+
 #scene-attribution {
   position: absolute;
   right: 0;
@@ -200,6 +217,7 @@ body[data-time="night"] #scene { background: #1b318e; }
   background: var(--paper);
   padding: 2px 8px;
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .scene-info {
@@ -513,12 +531,8 @@ body[data-time="night"] #scene { background: #1b318e; }
 }
 
 @media (width < 800px) {
-  .tool-panel {
-    position: absolute;
-    inset: 0 0 0 auto;
-    z-index: 3;
-    width: min(390px, 100%);
-  }
+  .app[data-panel] .exhibit { grid-template-rows: minmax(0, 1fr); }
+  .app[data-panel] .scene-info { display: none; }
 }
 
 @media (max-width: 620px) {
@@ -540,16 +554,12 @@ body[data-time="night"] #scene { background: #1b318e; }
 
 @media (orientation: portrait) and (width < 800px) {
   .app[data-panel] .workspace { grid-template-rows: minmax(0, 1fr) minmax(0, 1.35fr); }
-  .app[data-panel] .exhibit { grid-template-rows: minmax(0, 1fr); }
-  .app[data-panel] .scene-info { display: none; }
-  .tool-panel { position: static; width: 100%; }
 }
 
-@media (orientation: landscape) and (min-width: 540px) and (width < 800px) {
-  .app[data-panel] .workspace { grid-template-columns: minmax(0, 1fr) min(42%, 320px); }
-  .app[data-panel] .exhibit { grid-template-rows: minmax(0, 1fr); }
-  .app[data-panel] .scene-info { display: none; }
-  .tool-panel { position: static; width: 100%; }
+@media (orientation: landscape) and (width < 800px) {
+  .app[data-panel] .workspace {
+    grid-template-columns: minmax(0, 1fr) clamp(min(230px, 70%), 42%, 320px);
+  }
 }
 
 @media (orientation: landscape) and (max-height: 460px) {
@@ -567,6 +577,11 @@ body[data-time="night"] #scene { background: #1b318e; }
 @media (orientation: landscape) and (max-height: 460px) and (max-width: 700px) {
   .tour-controls { flex-direction: column-reverse; align-items: flex-end; gap: 3px; }
   #tour-note { width: auto; max-width: none; font-size: 11px; white-space: nowrap; }
+}
+
+@media (orientation: landscape) and (max-height: 460px) and (max-width: 420px) {
+  #tour-note { max-width: 20ch; white-space: normal; text-align: right; }
+  #tour-toggle { min-width: 104px; padding-inline: 8px; gap: 7px; font-size: 13px; }
 }
 
 @media (pointer: coarse) {

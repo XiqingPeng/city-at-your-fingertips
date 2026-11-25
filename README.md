@@ -43,4 +43,14 @@ Map extracts include source URLs, their release date, attribution and license in
 
 Three.js 0.170.0 and OrbitControls use the MIT license. The Latin subsets of Press Start 2P and DotGothic16 use the SIL Open Font License. Distribution notices accompany the files under `vendor/`.
 
-Run `node test-gestures.mjs`, `node test-tour.mjs` and `node --test test-map-data.mjs` to check continuous gestures, tour scheduling and map loading.
+## Tests
+
+Run `node --test test-gestures.mjs test-tour.mjs test-map-data.mjs` for the gesture, tour and map-data checks.
+
+With the local site running, the browser suite checks offline map reloads, camera cancellation, keyboard navigation and graphics recovery. It uses a synthetic video stream. The default URL is `http://localhost:8000/`. Set `PIXEL_CITY_URL` to test another local port.
+
+```sh
+npm install --no-save --package-lock=false playwright-core@1.56.1
+npx playwright-core install chromium
+node --test browser-checks.cjs
+```

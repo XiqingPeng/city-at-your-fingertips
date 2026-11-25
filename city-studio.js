@@ -486,8 +486,11 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
   $('#load-area').addEventListener('click', () => {
     try {
       const area = inputArea();
+      const { latitude, longitude } = area.place;
+      const featured = Object.entries(PRESETS).find(([, preset]) =>
+        preset.latitude === latitude && preset.longitude === longitude && preset.km === area.km);
       setSelection(area.place);
-      showMap({ area });
+      showMap({ area, city: featured?.[0] });
     } catch (error) {
       cancelMapLoad();
       setStatus(error.message);
