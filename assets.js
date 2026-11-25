@@ -23,6 +23,11 @@ const blossom = new THREE.MeshStandardMaterial({color:'#dca6a4'});
 const leafLight = new THREE.MeshStandardMaterial({color:'#b0c68a'});
 const warmWindow = new THREE.MeshStandardMaterial({color:'#e6ca8e'});
 const door = new THREE.MeshStandardMaterial({color:'#805b4b'});
+const canalRoofs = ['#b64c34','#276970','#30496c','#8b5839'].map(color => new THREE.MeshStandardMaterial({color}));
+const towerRoof = new THREE.MeshStandardMaterial({color:'#463f63'});
+const roofHighlight = new THREE.MeshStandardMaterial({color:'#6e6887'});
+const greenhouseGlass = new THREE.MeshStandardMaterial({color:'#58adab', roughness:1});
+const greenhouseRoof = new THREE.MeshStandardMaterial({color:'#297c7c', roughness:1});
 const buildingCache = new Map(), treeCache = new Map();
 function part(group, geometry, material, x, y, z, sx, sy, sz, shadow=true) {
   const mesh = new THREE.Mesh(geometry, material);
@@ -30,6 +35,20 @@ function part(group, geometry, material, x, y, z, sx, sy, sz, shadow=true) {
 }
 function windows(group, width, z, count=3) {
   for(let i=0;i<count;i++) part(group,box,glass,0,.25+i*.19,z,width,.065,.018,false);
+}
+function faceWindows(group, xs, ys, front, width, height) {
+  for (const y of ys) {
+    for (const x of xs) {
+      for (const side of [-1, 1]) {
+        part(group,box,dark,x,y,front*side,width+.035,height+.035,.024,false);
+        part(group,box,warmWindow,x,y,(front+.013)*side,width,height,.016,false);
+      }
+    }
+  }
+}
+function towerCap(group, y, width) {
+  part(group,box,roofHighlight,0,y,0,width,.045,width);
+  part(group,box,towerRoof,0,y+.033,0,width*.94,.04,width*.94);
 }
 function makeBuilding(type, color) {
   const group=new THREE.Group(), mat=walls[color % walls.length], roof=roofs[color % roofs.length];
@@ -68,6 +87,69 @@ function makeBuilding(type, color) {
       part(group,box,mat,0,.26,0,.96,.52,.86);part(group,box,roof,0,.53,0,1.02,.08,.92);
       part(group,box,mat,0,.68,0,.66,.26,.62);part(group,box,roof,0,.82,0,.73,.08,.68);
       part(group,box,mat,0,.93,0,.36,.18,.36);part(group,cone,roof,0,1.10,0,.34,.22,.34);break;
+    case 12: { // narrow gabled house with windows on both banks
+      const canalRoof = canalRoofs[color % canalRoofs.length];
+      part(group,box,mat,0,.38,0,.82,.76,.87);
+      part(group,box,trim,0,.75,0,.91,.034,.96);
+      part(group,gable,canalRoof,0,.765,0,.96,.39,1);
+      part(group,gable,mat,0,.769,.501,.65,.25,.042);
+      part(group,box,dark,.23,1,-.22,.11,.22,.13);
+      part(group,box,door,0,.135,.444,.14,.27,.029,false);
+      faceWindows(group,[-.21,.21],[.24,.47,.63],.445,.095,.082);
+      part(group,box,warmWindow,0,.865,.526,.09,.082,.027,false);
+      break;
+    }
+    case 13: // Lantern Heights bell tower
+      part(group,box,mat,0,.30,0,.90,.60,.84);
+      part(group,box,dark,0,.042,0,.98,.084,.92);
+      faceWindows(group,[-.26,0,.26],[.16,.30,.45],.429,.14,.064);
+      for (const side of [-1,1]) {
+        for (const z of [-.23,.23]) {
+          part(group,box,dark,side*.455,.33,z,.024,.19,.16,false);
+          part(group,box,warmWindow,side*.469,.34,z,.018,.116,.095,false);
+        }
+      }
+      towerCap(group,.58,.99);
+      part(group,box,mat,0,.76,0,.68,.31,.65);
+      faceWindows(group,[-.18,.18],[.70,.84],.334,.106,.09);
+      towerCap(group,.91,.77);
+      part(group,octagon,dark,0,1.07,0,.31,.26,.31);
+      part(group,octagon,warmWindow,0,1.09,0,.312,.11,.312,false);
+      part(group,octagon,trim,0,1.205,0,.33,.052,.33);
+      part(group,tapered,towerRoof,0,1.38,0,.36,.333,.36);
+      part(group,box,warmWindow,0,1.58,0,.09,.073,.09,false);
+      break;
+    case 14: // tiered spire with projecting eaves
+      part(group,box,mat,0,.245,0,.88,.49,.84);
+      faceWindows(group,[-.23,0,.23],[.18,.35],.429,.13,.078);
+      towerCap(group,.47,1.04);
+      part(group,box,mat,0,.615,0,.68,.243,.65);
+      faceWindows(group,[-.17,.17],[.62],.334,.14,.112);
+      towerCap(group,.733,.84);
+      part(group,box,mat,0,.862,0,.49,.203,.48);
+      faceWindows(group,[0],[.862],.249,.15,.115);
+      towerCap(group,.958,.64);
+      part(group,cone,towerRoof,0,1.09,0,.42,.23,.42);
+      part(group,box,warmWindow,0,1.24,0,.10,.067,.10,false);
+      break;
+    case 15: // glasshouse with a faceted dome and low wings
+      part(group,box,trim,0,.045,0,.98,.09,.82);
+      part(group,box,greenhouseGlass,0,.27,0,.98,.38,.69);
+      part(group,box,greenhouseRoof,0,.47,0,1.02,.06,.77);
+      part(group,gable,greenhouseGlass,-.32,.50,0,.35,.19,.76);
+      part(group,gable,greenhouseGlass,.32,.50,0,.35,.19,.76);
+      part(group,octagon,greenhouseRoof,0,.52,0,.255,.16,.43);
+      part(group,dome,greenhouseGlass,0,.605,0,.25,.26,.40);
+      part(group,box,trim,0,.875,0,.055,.056,.064,false);
+      for (const x of [-.46,-.30,-.14,.14,.30,.46]) {
+        for (const side of [-1,1]) {
+          part(group,box,trim,x,.286,side*.351,.021,.338,.021,false);
+          part(group,box,warmWindow,x+.046,.256,side*.354,.043,.104,.018,false);
+        }
+      }
+      part(group,box,dark,0,.219,.349,.15,.25,.025,false);
+      part(group,box,warmWindow,0,.258,.364,.12,.143,.018,false);
+      break;
     default: // domed civic hall with two low wings
       part(group,box,mat,0,.32,0,.66,.64,.70);part(group,box,mat,-.40,.20,0,.30,.40,.64);part(group,box,mat,.40,.20,0,.30,.40,.64);
       part(group,octagon,trim,0,.65,0,.40,.10,.40);part(group,dome,roof,0,.70,0,.39,.36,.39);part(group,box,warmWindow,0,.39,.36,.13,.16,.02,false);break;
@@ -85,7 +167,7 @@ function makeBuilding(type, color) {
     part(group,box,roof,0,.91,0,.38,.045,.38,false);
   }
   // Small square window tiles and a blocky sill read like pixel art at city scale.
-  if (![4, 9, 11].includes(type)) {
+  if (type < 11 && type !== 4 && type !== 9) {
     const front = type === 0 ? .425 : type === 2 ? .445 : type === 3 ? .401 : type === 6 ? .435 : type === 8 ? .39 : .455;
     for (const x of [-.23, 0, .23]) {
       for (const y of [.28, .48, .68]) {
@@ -96,8 +178,71 @@ function makeBuilding(type, color) {
   }
   return group;
 }
+// Bake the parts of a model into one mesh per material and shadow flag. Each
+// solid's vertex boundary remains available to the 3MF exporter.
+export function compactParts(source) {
+  source.updateMatrixWorld(true);
+  const batches = new Map();
+  source.traverse(object => {
+    if (!object.isMesh) return;
+    if (!batches.has(object.material)) batches.set(object.material, [[], []]);
+    batches.get(object.material)[Number(object.castShadow)].push(object);
+  });
+
+  const compact = new THREE.Group();
+  const normalMatrix = new THREE.Matrix3();
+  const v = new THREE.Vector3();
+  for (const [material, shadowBatches] of batches) {
+    for (const [shadow, meshes] of shadowBatches.entries()) {
+      if (!meshes.length) continue;
+
+      const vertexCount = meshes.reduce((sum, mesh) => sum + mesh.geometry.attributes.position.count, 0);
+      const indexCount = meshes.reduce((sum, mesh) => {
+        return sum + (mesh.geometry.index?.count ?? mesh.geometry.attributes.position.count);
+      }, 0);
+      const positions = new Float32Array(3 * vertexCount);
+      const normals = new Float32Array(3 * vertexCount);
+      const indices = vertexCount > 65536 ? new Uint32Array(indexCount) : new Uint16Array(indexCount);
+      const solidVertexEnds = [];
+      let vertexOffset = 0;
+      let indexOffset = 0;
+      for (const mesh of meshes) {
+        const {position, normal} = mesh.geometry.attributes;
+        const index = mesh.geometry.index;
+        normalMatrix.getNormalMatrix(mesh.matrixWorld);
+        for (let i = 0; i < position.count; i++) {
+          v.fromBufferAttribute(position, i).applyMatrix4(mesh.matrixWorld).toArray(positions, 3 * (vertexOffset + i));
+          v.fromBufferAttribute(normal, i).applyNormalMatrix(normalMatrix).toArray(normals, 3 * (vertexOffset + i));
+        }
+        const count = index?.count ?? position.count;
+        for (let i = 0; i < count; i++) {
+          indices[indexOffset++] = vertexOffset + (index ? index.getX(i) : i);
+        }
+        const sourceEnds = mesh.geometry.userData.solidVertexEnds ?? [position.count];
+        for (const end of sourceEnds) solidVertexEnds.push(vertexOffset + end);
+        vertexOffset += position.count;
+      }
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+      geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+      geometry.userData.solidVertexEnds = solidVertexEnds;
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.castShadow = Boolean(shadow);
+      mesh.receiveShadow = true;
+      mesh.matrixAutoUpdate = false;
+      compact.add(mesh);
+    }
+  }
+  return compact;
+}
+
+export function lanternMaterial() {
+  return warmWindow;
+}
+
 export function building(type, color) {
-  const key=`${type}:${color}`; if(!buildingCache.has(key)) buildingCache.set(key,makeBuilding(type,color));
+  const key=`${type}:${color}`; if(!buildingCache.has(key)) buildingCache.set(key,compactParts(makeBuilding(type,color)));
   return buildingCache.get(key).clone();
 }
 function makeTree(type, color) {
@@ -122,6 +267,6 @@ function makeTree(type, color) {
   return group;
 }
 export function tree(type, color) {
-  const key=`${type}:${color}`; if(!treeCache.has(key)) treeCache.set(key,makeTree(type,color));
+  const key=`${type}:${color}`; if(!treeCache.has(key)) treeCache.set(key,compactParts(makeTree(type,color)));
   return treeCache.get(key).clone();
 }
