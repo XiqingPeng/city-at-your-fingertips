@@ -1,5 +1,6 @@
 export const MAP_WIDTH = 40;
 export const BASE_WIDTH = 42;
+export const MAX_AREA_KM = 8;
 export const OSM_LICENSE = 'https://opendatacommons.org/licenses/odbl/1-0/';
 export const OSM_ATTRIBUTION = '© OpenStreetMap contributors';
 export const TOWER_NAMES = /^(tokyo tower|東京タワー|东京塔|东方明珠((广播)?电视塔)?|東方明珠((廣播)?電視塔)?|oriental pearl( radio( and| &)? (tv|television))? tower|eiffel tower|tour eiffel|埃菲尔铁塔|cn tower|tour cn)$/i;
@@ -13,9 +14,19 @@ export const PRESETS = Object.freeze({
   Venice: Object.freeze({ name: 'Venice', neighborhood: 'Rialto Bridge', latitude: 45.43793, longitude: 12.33599, km: 2, file: 'venice.json' })
 });
 
+export const OVERVIEW_KEY = 'Shanghai overview';
+export const SAVED_AREAS = Object.freeze({
+  ...PRESETS,
+  [OVERVIEW_KEY]: Object.freeze({
+    ...PRESETS.Shanghai, neighborhood: 'Huangpu River', km: 8, file: 'shanghai-8km.json'
+  })
+});
+
 const DEGREES = 180 / Math.PI;
 const SCENE_HALF = MAP_WIDTH / 2;
 const WORLD_BOUNDS = [-SCENE_HALF, -SCENE_HALF, SCENE_HALF, SCENE_HALF];
+const OVERPASS_MAX_KM = 4;
+const SAMPLE_GRID = 16;
 const LIVE_LIMITS = { buildings: 1800, buildingPoints: 42000, roads: 5000, waterPoints: 8000, landmarks: 36 };
 export const PRESET_LIMITS = { buildings: 1300, buildingPoints: 23000, roads: 3500, waterPoints: 5000, landmarks: 24 };
 const OVERPASS = [
@@ -42,8 +53,8 @@ export function makeArea(place, km) {
       !Number.isFinite(longitude) || Math.abs(longitude) > 180) {
     throw new MapDataError('coordinates', 'Enter latitude from −85 to 85 and longitude from −180 to 180.');
   }
-  if (!Number.isFinite(km) || km < .5 || km > 4) {
-    throw new MapDataError('coordinates', 'Choose an area size from 0.5 to 4 km.');
+  if (!Number.isFinite(km) || km < .5 || km > MAX_AREA_KM) {
+    throw new MapDataError('coordinates', 'Choose an area size from 0.5 to ' + MAX_AREA_KM + ' km.');
   }
   const center = { ...place, longitude: wrapLongitude(longitude) };
   const halfLat = km / 2 / 111.32;
@@ -130,7 +141,7 @@ async function readJSON(response, limit) {
 const finitePoint = point => Array.isArray(point) && point.length === 2 && point.every(Number.isFinite);
 const samePoint = (a, b) => Math.abs(a[0] - b[0]) < 1e-8 && Math.abs(a[1] - b[1]) < 1e-8;
 
-function signedArea(ring) {
+export function signedArea(ring) {
   let twiceArea = 0;
   for (let i = 0; i < ring.length; i++) {
     const [x, y] = ring[i], [nextX, nextY] = ring[(i + 1) % ring.length];
@@ -310,16 +321,24 @@ function buildingAreaOrder(a, b) {
   return b.area - a.area || a.id.localeCompare(b.id);
 }
 
+function* spreadAcrossSquare(entries, position, order) {
+  const cells = Array.from({ length: SAMPLE_GRID ** 2 }, () => []);
+  const cell = coordinate => Math.min(SAMPLE_GRID - 1,
+    Math.max(0, Math.floor((coordinate / MAP_WIDTH + .5) * SAMPLE_GRID)));
+  for (const entry of entries) {
+    const [x, y] = position(entry);
+    cells[cell(y) * SAMPLE_GRID + cell(x)].push(entry);
+  }
+  for (const group of cells) group.sort(order);
+  const layers = Math.max(...cells.map(group => group.length));
+  for (let layer = 0; layer < layers; layer++) {
+    for (const group of cells) if (group[layer]) yield group[layer];
+  }
+}
+
 function pickBuildings(buildings, limits) {
-  const cells = Array.from({ length: 256 }, () => []);
   const priority = buildings.filter(b => b.height > 60).sort((a, b) => b.height - a.height).slice(0, 40);
   const featured = new Set(priority);
-  for (const building of buildings) {
-    if (featured.has(building)) continue;
-    const cell = coordinate => Math.min(15, Math.max(0, Math.floor((coordinate / MAP_WIDTH + .5) * 16)));
-    cells[cell(building.anchor[1]) * 16 + cell(building.anchor[0])].push(building);
-  }
-  for (const cell of cells) cell.sort(buildingAreaOrder);
   const result = [];
   let pointCount = 0;
   function add(building) {
@@ -330,14 +349,44 @@ function pickBuildings(buildings, limits) {
     pointCount += points;
   }
   priority.forEach(add);
-  const layers = Math.max(...cells.map(cell => cell.length));
-  for (let layer = 0; layer < layers && result.length < limits.buildings; layer++) {
-    for (const cell of cells) if (cell[layer]) add(cell[layer]);
+  const remaining = buildings.filter(building => !featured.has(building));
+  for (const building of spreadAcrossSquare(remaining, b => b.anchor, buildingAreaOrder)) {
+    if (result.length >= limits.buildings) break;
+    add(building);
   }
   return result;
 }
 
 const majorRoad = road => /^(motorway|trunk|primary|secondary|tertiary)/.test(road.class || '');
+
+function pickRoads(entries, area, limit) {
+  const candidates = [];
+  for (const entry of entries) {
+    const line = entry.line.filter(finitePoint).map(area.project);
+    const tileBounds = worldTileBounds(entry.tileBounds, area);
+    const major = majorRoad(entry);
+    const width = (major ? 10 : 5) * MAP_WIDTH / (area.km * 1000);
+    const id = String(entry.id);
+    for (let i = 1; i < line.length; i++) {
+      const segment = tileBounds ? clipSegment(line[i - 1], line[i], tileBounds) : [line[i - 1], line[i]];
+      if (!segment) continue;
+      const clipped = clipSegment(...segment, WORLD_BOUNDS);
+      if (!clipped) continue;
+      const [[x, y], [nextX, nextY]] = clipped;
+      const length = Math.hypot(nextX - x, nextY - y);
+      if (length >= .007) candidates.push({
+        id, line: clipped, width, length, major, midpoint: [(x + nextX) / 2, (y + nextY) / 2]
+      });
+    }
+  }
+  const roads = [];
+  const order = (a, b) => Number(b.major) - Number(a.major) || b.length - a.length;
+  for (const { id, line, width } of spreadAcrossSquare(candidates, road => road.midpoint, order)) {
+    if (roads.length >= limit) break;
+    roads.push({ id, line, width });
+  }
+  return roads;
+}
 
 export function prepareArea(data, area, limits = LIVE_LIMITS) {
   const usable = [];
@@ -361,22 +410,7 @@ export function prepareArea(data, area, limits = LIVE_LIMITS) {
   }
   const buildings = pickBuildings(usable, limits);
   if (!buildings.length) throw new MapDataError('empty', 'No usable building footprints were found in this square. Move the pin or adjust the size.');
-  const roads = [];
-  const roadEntries = data.roads.slice().sort((a, b) => Number(majorRoad(b)) - Number(majorRoad(a)));
-  for (const entry of roadEntries) {
-    if (roads.length >= limits.roads) break;
-    const line = entry.line.filter(finitePoint).map(area.project);
-    const tileBounds = worldTileBounds(entry.tileBounds, area);
-    const width = (majorRoad(entry) ? 10 : 5) * MAP_WIDTH / (area.km * 1000);
-    for (let i = 1; i < line.length && roads.length < limits.roads; i++) {
-      const segment = tileBounds ? clipSegment(line[i - 1], line[i], tileBounds) : [line[i - 1], line[i]];
-      if (!segment) continue;
-      const clipped = clipSegment(...segment, WORLD_BOUNDS);
-      if (clipped && Math.hypot(clipped[0][0] - clipped[1][0], clipped[0][1] - clipped[1][1]) >= .007) {
-        roads.push({ id: String(entry.id), line: clipped, width });
-      }
-    }
-  }
+  const roads = pickRoads(data.roads, area, limits.roads);
   const water = [];
   let waterPoints = 0;
   for (const entry of data.water) {
@@ -403,8 +437,8 @@ export function prepareArea(data, area, limits = LIVE_LIMITS) {
 }
 
 export async function loadPreset(city, signal, fetcher = fetch) {
-  if (!Object.hasOwn(PRESETS, city)) throw new MapDataError('invalid', 'This featured neighborhood is unavailable.');
-  const preset = PRESETS[city];
+  if (!Object.hasOwn(SAVED_AREAS, city)) throw new MapDataError('invalid', 'This saved area is unavailable.');
+  const preset = SAVED_AREAS[city];
   const area = makeArea(preset, preset.km);
   const url = new URL('./map-data/' + preset.file, import.meta.url);
   const snapshot = await withDeadline(signal, 8000, async requestSignal =>
@@ -414,7 +448,7 @@ export async function loadPreset(city, signal, fetcher = fetch) {
       !Array.isArray(snapshot.buildings) || !snapshot.buildings.length ||
       !Array.isArray(snapshot.roads) || !Array.isArray(snapshot.water) || !Array.isArray(snapshot.landmarks) ||
       snapshot.source?.license !== OSM_LICENSE || typeof snapshot.source.attribution !== 'string' || !snapshot.source.timestamp) {
-    throw new MapDataError('invalid', 'This featured neighborhood data could not be verified.');
+    throw new MapDataError('invalid', 'This saved map data could not be verified.');
   }
   return { area, layout: snapshot };
 }
@@ -449,13 +483,17 @@ export async function loadLiveArea(area, signal, {
     if (!bestError || priorities.indexOf(error.code) < priorities.indexOf(bestError.code)) bestError = error;
   }
   if (vectorLoader) {
-    onProgress('Loading neighborhood map tiles…');
+    onProgress('Loading map tiles…');
     try {
-      return await withDeadline(signal, 7200, async requestSignal =>
-        prepareArea(await vectorLoader(area, requestSignal, { fetcher }), area));
+      return await withDeadline(signal, area.km > OVERPASS_MAX_KM ? 12000 : 7200, async requestSignal =>
+        prepareArea(await vectorLoader(area, requestSignal, { fetcher, onProgress }), area));
     } catch (error) {
       remember(error);
     }
+  }
+  if (area.km > OVERPASS_MAX_KM) {
+    if (bestError) throw bestError;
+    throw new MapDataError('unavailable', 'Map tiles for this square were unavailable. Try again or choose a smaller square.');
   }
   const query = overpassQuery(area);
   for (const [index, endpoint] of endpoints.entries()) {

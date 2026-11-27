@@ -1,5 +1,4 @@
 const FINGER_BASES = [5, 9, 13, 17];
-const PALM_POINTS = [0, ...FINGER_BASES];
 const OTHER_POSES = new Set(['Pointing_Up', 'Thumb_Up', 'Thumb_Down', 'Victory', 'ILoveYou']);
 
 // Time in milliseconds and movement in fractions of the camera image.
@@ -8,9 +7,13 @@ const DIRECTION_PAUSE = 500;
 const MIN_GAP_LIMIT = 180;
 const MAX_GAP_LIMIT = 625;
 const STILL_VERTICAL = 0.011;
+const PAUSE_VERTICAL_RANGE = 0.003;
+const PAUSE_SPEED = 0.000004;
 const SIDEWAYS_TRAVEL = 0.018;
 const STROKE_START = 0.018;
+const CONFIRM_INTERVAL = 120;
 const RETURN_TRAVEL = 0.024;
+const RETURN_FRACTION = 0.4;
 const HEIGHT_STEP = 0.007;
 
 const clamp = value => Math.max(0, Math.min(1, value));
@@ -61,15 +64,12 @@ function isOpenPalm(result, imageLandmarks) {
 }
 
 function palmSample(hand, handedness, time) {
-  let x = 0, y = 0;
-  for (const index of PALM_POINTS) {
-    x += hand[index].x;
-    y += hand[index].y;
-  }
+  // The knuckles move around the wrist as a palm turns or changes apparent size.
+  const wrist = hand[0];
   return {
-    x: x / PALM_POINTS.length,
-    y: y / PALM_POINTS.length,
-    scale: length(vector(hand[0], hand[9])),
+    x: wrist.x,
+    y: wrist.y,
+    scale: length(vector(wrist, hand[9])),
     side: handedness?.score >= 0.8 ? handedness.categoryName : null,
     time
   };
@@ -92,7 +92,29 @@ function isSideways(from, to) {
   return across >= SIDEWAYS_TRAVEL && Math.abs(from.y - to.y) < 1.25 * across;
 }
 
+function keepsMoving(samples) {
+  if (samples.length < 5) return false;
+  let previousY = (samples[0].y + samples[1].y) / 2;
+  let min = previousY, max = previousY;
+  let path = 0, moving = 0;
+  // Sustained travel covers most of the window with room for one reversal.
+  // Average adjacent wrist positions before measuring it.
+  for (let i = 2; i < samples.length; i++) {
+    const y = (samples[i - 1].y + samples[i].y) / 2;
+    const step = Math.abs(y - previousY);
+    path += step;
+    if (step >= PAUSE_SPEED * (samples[i].time - samples[i - 1].time)) moving++;
+    min = Math.min(min, y);
+    max = Math.max(max, y);
+    previousY = y;
+  }
+  const range = max - min;
+  return range >= PAUSE_VERTICAL_RANGE &&
+    path <= 2 * range + Number.EPSILON && moving * 2 > samples.length - 2;
+}
+
 export function createGestureMapper() {
+  const recent = [];
   let lastPalm = null;
   let frameInterval = null;
   let still = null;
@@ -110,6 +132,7 @@ export function createGestureMapper() {
   }
 
   function reset() {
+    recent.length = 0;
     lastPalm = null;
     frameInterval = null;
     still = null;
@@ -144,6 +167,8 @@ export function createGestureMapper() {
     const elapsed = now - previous.time;
     frameInterval = frameInterval === null ? elapsed : 0.75 * frameInterval + 0.25 * elapsed;
     lastPalm = palm;
+    recent.push(palm);
+    while (now - recent[0].time > DIRECTION_PAUSE) recent.shift();
 
     if (Math.abs(still.y - palm.y) > STILL_VERTICAL ||
         Math.abs(still.x - palm.x) > SIDEWAYS_TRAVEL) still = palm;
@@ -153,7 +178,10 @@ export function createGestureMapper() {
       if (quietFor >= ENTRY_SETTLE) beginStroke(palm);
       return { state: 'ready' };
     }
-    if (quietFor >= DIRECTION_PAUSE) {
+    // Rearm once per pause. A slow stroke can make steady progress inside
+    // the stillness band in either direction.
+    if (direction && quietFor >= DIRECTION_PAUSE &&
+        now - lastAdvance.time >= DIRECTION_PAUSE && !keepsMoving(recent)) {
       direction = 0;
       beginStroke(palm);
       return { state: 'ready' };
@@ -165,21 +193,34 @@ export function createGestureMapper() {
     }
 
     const vertical = origin.y - palm.y;
-    if (!direction && Math.abs(vertical) >= STROKE_START) direction = Math.sign(vertical);
-    if (!direction) return { state: 'ready' };
+    const strokeDirection = direction || Math.sign(vertical);
+    const travel = strokeDirection * vertical;
+    const previousTravel = strokeDirection * (origin.y - previous.y);
+    // Nearby camera frames should agree on the start of a stroke.
+    // Sparse tracks can travel a substantial distance between observations.
+    const needsConfirmation = elapsed <= CONFIRM_INTERVAL;
+    const confirmed = !needsConfirmation || previousTravel >= STROKE_START / 2;
+    if (!direction) {
+      if (travel < STROKE_START + HEIGHT_STEP || !confirmed) return { state: 'ready' };
+      direction = strokeDirection;
+      lastAdvance = palm;
+    }
 
     const state = direction > 0 ? 'lifting' : 'lowering';
-    const travel = direction * vertical;
-    if (travel < 0 || peak - travel >= RETURN_TRAVEL) {
-      // A return opens a fresh stroke in the same direction after its next turn.
-      beginStroke(palm);
+    const returnDistance = Math.max(RETURN_TRAVEL, peak * RETURN_FRACTION);
+    if (travel < 0 || peak - travel >= returnDistance) {
+      // A real return opens a fresh stroke. A brief retreat near the peak keeps
+      // its credited progress so the rebound cannot add it a second time.
+      if (peak === 0 || !needsConfirmation || peak - previousTravel >= returnDistance / 2) {
+        beginStroke(palm);
+      }
       return { state };
     }
 
     peak = Math.max(peak, travel);
     const progress = Math.max(0, travel - STROKE_START);
     const gain = progress - credited;
-    if (gain < HEIGHT_STEP) return { state };
+    if (gain < HEIGHT_STEP || (!credited && !confirmed)) return { state };
     credited = progress;
     lastAdvance = palm;
     const height = clamp(currentHeight + direction * gain);

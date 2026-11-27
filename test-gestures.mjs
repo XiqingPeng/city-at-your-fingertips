@@ -277,3 +277,99 @@ test('both directions stop exactly at the manual slider limits', () => {
     freezes(move(hand, target, .66));
   }
 });
+
+test('distance and angle changes around a stationary wrist do not move the skyline', () => {
+  const hand = openHand.map(([x, y, z]) => [x, y - openHand[0][1], z]);
+  for (const [property, from, to] of [['scale', .65, 1.25], ['roll', Math.PI / 2, Math.PI / 3]]) {
+    const track = simulate({ hand, [property]: from });
+    hold(track, .63);
+    const sweep = (start, end) => Array.from({ length: 24 }, (_, i) =>
+      track.step(.63, { [property]: start + (end - start) * (i + 1) / 24 }));
+    freezes(sweep(from, to));
+    freezes(Array.from({ length: 15 }, () => track.step(.63, { [property]: to })));
+    freezes(sweep(to, from));
+    assert.equal(track.height, .45);
+  }
+});
+
+test('a single position spike neither starts a stroke nor rearms it after a lift', () => {
+  for (const spike of [-.055, .055]) {
+    const hand = simulate();
+    hold(hand, .66);
+    assert.deepEqual(hand.step(.66 + spike), { state: 'ready' });
+    freezes(hold(hand, .66));
+    assert.equal(hand.height, .45);
+  }
+
+  const hand = simulate();
+  hold(hand, .66);
+  move(hand, .66, .54);
+  const raised = hand.height;
+  freezes([hand.step(.605), hand.step(.54), ...hold(hand, .54, 3)]);
+  assert.equal(hand.height, raised);
+  freezes(move(hand, .54, .66));
+  move(hand, .66, .54);
+  near(hand.height - raised, .102);
+});
+
+test('small reversals near the top do not count as another lift', () => {
+  const hand = simulate();
+  hold(hand, .66);
+  move(hand, .66, .54);
+  const raised = hand.height;
+  for (let sway = 0; sway < 2; sway++) {
+    freezes(move(hand, .54, .575, 4));
+    freezes(move(hand, .575, .54, 4));
+  }
+  assert.equal(hand.height, raised);
+
+  freezes(move(hand, .54, .60));
+  move(hand, .60, .54);
+  near(hand.height - raised, .042);
+});
+
+test('slow lifts and presses respond while their slow returns preserve height', () => {
+  for (const jitter of [0, .0015]) {
+    const hand = simulate();
+    const slowMove = (from, to) => Array.from({ length: 188 }, (_, i) =>
+      hand.step(from + (to - from) * (i + 1) / 188 + (i % 2 ? jitter : -jitter)));
+    hold(hand, .66);
+    const lifted = slowMove(.66, .54);
+    assert.equal(lifted.at(-1).state, 'lifting');
+    near(hand.height - .45, .102);
+
+    const raised = hand.height;
+    const returning = slowMove(.54, .66);
+    freezes(returning);
+    assert.ok(returning.every(event => event.state === 'lifting'));
+    freezes(hold(hand, .66, 15));
+    assert.equal(hand.step(.66).state, 'ready');
+
+    const pressed = slowMove(.66, .78);
+    assert.equal(pressed.at(-1).state, 'lowering');
+    near(raised - hand.height, .102);
+    freezes(slowMove(.78, .66));
+  }
+});
+
+test('about half a second of small uneven jitter still lets the hand reverse direction', () => {
+  const traces = [
+    [.003, .003, .002, .001, -.003, -.003, -.002, -.001],
+    [.003, .003, .003, .003, -.003, -.003, -.003, -.003]
+  ];
+  for (const jitter of traces) {
+    for (let offset = 0; offset < jitter.length; offset++) {
+      const hand = simulate();
+      hold(hand, .66);
+      move(hand, .66, .54);
+      const raised = hand.height;
+      const paused = Array.from({ length: 13 }, (_, i) =>
+        hand.step(.54 + jitter[(i + offset) % jitter.length], {}, i === 12 ? 20 : 40));
+      freezes(paused);
+      assert.equal(paused.at(-2).state, 'lifting');
+      assert.equal(paused.at(-1).state, 'ready');
+      assert.equal(move(hand, .54, .66).at(-1).state, 'lowering');
+      near(raised - hand.height, .102);
+    }
+  }
+});

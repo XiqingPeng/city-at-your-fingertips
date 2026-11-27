@@ -51,6 +51,7 @@
           <section class="control-section">
             <h3 id="places-title">Pick a city</h3>
             <div id="city-options" class="city-options" role="group" aria-labelledby="places-title"></div>
+            <button id="city-overview" type="button">Shanghai · 8 × 8 km</button>
             <details id="area-editor">
               <summary>Adjust map area</summary>
               <div class="field-row">
@@ -60,6 +61,7 @@
                   <option value="1">1 × 1 km</option>
                   <option value="2" selected>2 × 2 km</option>
                   <option value="4">4 × 4 km</option>
+                  <option value="8">8 × 8 km</option>
                 </select>
               </div>
               <div id="selection-preview" hidden>
@@ -91,8 +93,8 @@
             </div>
             <div class="sliders">
               <label>Building height <output id="height-value"></output><input id="height" type="range" min="0" max="100" value="45"></label>
-              <label>City density <output id="density-value"></output><input id="density" type="range" min="0" max="100" value="65"></label>
-              <label>Forest cover <output id="forest-value"></output><input id="forest" type="range" min="0" max="100" value="15"></label>
+              <label>City density <output id="density-value"></output><input id="density" type="range" min="0" max="100" value="82"></label>
+              <label>Forest cover <output id="forest-value"></output><input id="forest" type="range" min="0" max="100" value="19"></label>
             </div>
             <p class="muted" id="mode-hint">Use sliders to shape the current neighborhood.</p>
             <div class="actions">
@@ -155,27 +157,21 @@
               <path fill="#99ba73" d="M0 60h168v4H0z"/>
               <path fill="#70a399" d="M17 48h18v9H17zm71 2h11v7H88z"/>
               <g class="gesture-demo-building">
-                <path fill="#203239" d="M48 21h8v-5h29v39H48z"/>
-                <path fill="#fff1af" d="M54 23h22l6-4H60z"/>
-                <path fill="#ecad59" d="M51 25h26v27H51z"/>
-                <path fill="#cd804b" d="M77 25l5-3v30h-5z"/>
-                <path fill="#5c5c59" d="M55 28h5v6h-5zm10 0h5v6h-5zm-10 9h5v6h-5zm10 0h5v6h-5zm0 9h5v6h-5z"/>
+                <image href="./art/canal-tower.png" x="44" y="4" width="43" height="51" style="image-rendering:pixelated"/>
               </g>
               <g transform="translate(92 14)">
-                <g class="gesture-demo-hand" stroke="#203239" stroke-width="1.5">
-                  <path fill="#f9c593" d="M2 8h17l5-4h7v3l-3 3h15v1h9v9h-9v-2H26l-8-3H7v-2H4v-2H2z"/>
-                  <path fill="#d69366" stroke="none" d="M8 13h12l7 3h16v1H26l-8-3H8z"/>
-                  <path fill="none" stroke-width="1" d="M5 10h14m-9 3h10l5 2"/>
-                  <path fill="#74aaa7" d="M44 11h8v9h-8z"/>
+                <g class="gesture-demo-hand">
+                  <image href="./art/tray-palm.png" x="0" y="2" width="52" height="22" style="image-rendering:pixelated"/>
                 </g>
               </g>
               <path fill="#345b53" d="M153 21h3v3h3v3h-3v14h3v3h-3v3h-3v-3h-3v-3h3V27h-3v-3h3z"/>
             </svg>
             <ol class="gesture-steps">
-              <li>Hold one hand flat, with your palm slightly toward the camera. Lift in short, repeated strokes to grow buildings.</li>
-              <li>Let your hand come back down between lifts.</li>
-              <li>Pause, then press down to lower buildings. Hold still to stop.</li>
+              <li>Show one open hand. Hold it flat like a tray, tilted slightly toward the camera.</li>
+              <li>Lift in short strokes to grow buildings. Bring your hand back down right away between lifts.</li>
+              <li>Pause for half a second, then press down to lower buildings. Bring your hand back up right away to repeat. Hold still to keep the height.</li>
             </ol>
+            <a href="./art/gesture-guide-a4.pdf" download>Download the A4 gesture guide (PDF)</a>
           </section>
           <div class="preview">
             <video id="video" autoplay playsinline muted></video>

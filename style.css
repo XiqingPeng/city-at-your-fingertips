@@ -394,6 +394,14 @@ body[data-time="night"] #scene { background: #1b318e; }
   font-size: 12px;
 }
 
+#city-overview {
+  width: 100%;
+  min-height: 42px;
+  margin-top: 6px;
+  text-align: left;
+  font-weight: 700;
+}
+
 #area-editor {
   border-top: 2px dashed var(--line);
   margin-top: 12px;

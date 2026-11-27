@@ -1,21 +1,34 @@
 import * as THREE from 'three';
-import { MapDataError, PRESETS, loadLiveArea, loadPreset, makeArea, withDeadline, wrapLongitude } from './map-data.mjs';
+import { DEFAULT_CITY_COLORS, paintCitySwatch } from './assets.js';
+import { BASE_WIDTH, MapDataError, OVERVIEW_KEY, PRESETS, SAVED_AREAS, loadLiveArea, loadPreset, makeArea, withDeadline, wrapLongitude } from './map-data.mjs';
 import { vectorFeatures } from './map-tiles.mjs';
 import { createMapModel, disposeMapModel, highlightLandmark, setMapElevation, setMapHeight } from './map-scene.js';
 import { getElevation } from './terrain.js';
 
 const palettes = {
-  harvest: { ground: '#d5ad38', road: '#f4d46e', water: '#4a8298', building: ['#eec052', '#d88132', '#f3d988', '#b95b29', '#efad42', '#d7a648', '#f1c668'], green: ['#526f25', '#779329', '#315d34', '#a1aa32', '#8f9826', '#537b39'] },
-  garden: { ground: '#b0bd70', road: '#e2cf94', water: '#5d9792', building: ['#e9c48f', '#cf9470', '#f0dda9', '#bba47c', '#ddad83', '#c4b98b', '#ebce9b'], green: ['#4e764c', '#779d61', '#345e47', '#9db76b', '#739457', '#547e5b'] },
-  twilight: { ground: '#918778', road: '#dfb58d', water: '#596d9e', building: ['#d99576', '#b36e65', '#e6bc91', '#967487', '#d58d80', '#a599a2', '#e5b590'], green: ['#52677a', '#78838a', '#405a69', '#9ba29b', '#7b8d82', '#5d7880'] }
+  harvest: {
+    ground: '#92b174', road: '#e4c29a', water: '#3796aa',
+    ...DEFAULT_CITY_COLORS
+  },
+  garden: {
+    ground: '#83a681', road: '#daccae', water: '#46989a',
+    building: ['#e5bf9d', '#cf9577', '#f4dfb4', '#8ec9a8', '#e0b486', '#86bcb9', '#d5be92'],
+    roof: ['#b7583c', '#dcab42', '#af625e', '#388a80', '#cd8258', '#ac6a51', '#af9450'],
+    green: ['#4e8a5b', '#6ead5e', '#30775a', '#8bad58', '#a7b04c', '#3a906d']
+  },
+  twilight: {
+    ground: '#899496', road: '#ddba9b', water: '#526c9e',
+    building: ['#f2bc98', '#d9958b', '#ecccaa', '#a9a6bf', '#e6aa9e', '#92a6bd', '#d7b499'],
+    roof: ['#b95b59', '#cd8745', '#ad556c', '#56728d', '#d2796d', '#8c546c', '#c18b59'],
+    green: ['#547d77', '#7b9c7c', '#416f73', '#8ca490', '#959f82', '#5a8b87']
+  }
 };
 const MAP_HARVEST = {
-  ground: '#aeb275', road: '#f0e2bf', water: '#448692',
-  building: ['#e6bc8e', '#bd795f', '#adc1a8', '#e9dcc2', '#c49776', '#83aaa4', '#ceb996']
+  ground: '#96a181', road: '#ead1aa', water: '#34879d',
+  building: ['#e6c49d', '#d69377', '#bcc9aa', '#efdbb8', '#d7ac88', '#8fb3b4', '#d4bd98'],
+  roof: ['#cd7455', '#db9b4f', '#c36a63', '#84a29e', '#d5885d', '#698f9e', '#dcab65']
 };
 const mapColors = name => name === 'harvest' ? MAP_HARVEST : palettes[name];
-const WALL_COLORS = ['e6c9a7', 'c7b7a1', 'e2d5bf', 'b2c2af', 'dba995', 'aebec0', 'd9c3a3'];
-const TREE_COLORS = ['6b9c78', '83a985', '548467', 'a1b989', 'b0a76a', '779b6d'];
 const $ = selector => document.querySelector(selector);
 
 function download(blob, name) {
@@ -85,7 +98,7 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
   const selectionMap = $('#selection-map');
   const terrainField = $('#terrain');
   const landmarkField = $('#landmark');
-  const originals = new Map();
+  const swatches = new Set();
   const presetCache = new Map(), liveCache = new Map();
   const initial = { position: camera.position.clone(), target: controls.target.clone() };
   let palette = 'harvest', topView = false, statusVersion = 0;
@@ -93,9 +106,8 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
   let model = null, mapJob = null, terrainJob = null;
   let terrainPreference = 'flat';
 
-  procedural.traverse(object => {
-    const material = object.material;
-    if (material?.color && !originals.has(material)) originals.set(material, material.color.getHexString());
+  procedural.traverse(({ material }) => {
+    if (material?.userData.citySwatch) swatches.add(material);
   });
 
   function setStatus(message) {
@@ -115,17 +127,13 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
     const colors = palettes[name];
     ground.material.color.set(colors.ground);
     roadMat.color.set(colors.road);
-    for (const [material, original] of originals) {
-      const wall = WALL_COLORS.indexOf(original);
-      const tree = TREE_COLORS.indexOf(original);
-      if (wall >= 0) material.color.set(colors.building[wall]);
-      if (tree >= 0) material.color.set(colors.green[tree]);
-    }
+    for (const material of swatches) paintCitySwatch(material, colors);
     const mapPalette = mapColors(name);
     realRoot.traverse(object => {
       const { colorRole, colorIndex } = object.userData;
       if (!colorRole) return;
-      object.material.color.set(colorRole === 'building' ? mapPalette.building[colorIndex] : mapPalette[colorRole]);
+      const value = mapPalette[colorRole];
+      object.material.color.set(colorIndex === undefined ? value : value[colorIndex]);
     });
     document.querySelectorAll('[data-palette]').forEach(button => {
       const active = button.dataset.palette === name;
@@ -157,7 +165,8 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
     topView = false;
     $('#toggle-view span').textContent = 'Top view';
     controls.target.copy(initial.target);
-    camera.position.copy(initial.position);
+    const scale = procedural.visible ? ground.geometry.parameters.width / BASE_WIDTH : 1;
+    camera.position.copy(initial.position).sub(initial.target).multiplyScalar(scale).add(initial.target);
     camera.up.set(0, 1, 0);
     controls.update();
   }
@@ -297,10 +306,8 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
     setLandmarkOptions();
     terrainField.value = 'flat';
     setMode(false);
-    if (source === 'manual') {
-      setStatus('');
-      resetView();
-    }
+    if (source === 'manual') setStatus('');
+    resetView();
     onSceneChange?.({ kind: 'generated', source });
   }
 
@@ -314,7 +321,7 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
     try {
       let layout;
       if (city) {
-        progress('Loading the featured neighborhood…');
+        progress('Loading the saved map…');
         const snapshot = presetCache.get(city) || await loadPreset(city, signal);
         signal.throwIfAborted();
         presetCache.set(city, snapshot);
@@ -387,13 +394,24 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
   $('#reset-view').addEventListener('click', resetView);
   $('#toggle-view').addEventListener('click', () => {
     topView = !topView;
+    if (!topView) { resetView(); return; }
+    const scale = procedural.visible ? ground.geometry.parameters.width / BASE_WIDTH : 1;
     controls.target.set(0, 0, 0);
-    camera.position.set(topView ? .01 : 37, topView ? 72 : 37, topView ? .01 : 51);
+    camera.position.set(.01, 72 * scale, .01);
     controls.update();
-    $('#toggle-view span').textContent = topView ? '3D view' : 'Top view';
+    $('#toggle-view span').textContent = '3D view';
   });
   $('#imaginary').addEventListener('click', () => showGenerated());
   $('#cancel-load').addEventListener('click', cancelMapLoad);
+  function chooseSavedArea(city) {
+    const preset = SAVED_AREAS[city];
+    areaEditor.open = false;
+    areaField.value = String(preset.km);
+    setSelection(preset);
+    showMap({ city });
+  }
+
+  $('#city-overview').addEventListener('click', () => chooseSavedArea(OVERVIEW_KEY));
   const cityOptions = $('#city-options');
   for (const [index, [city, preset]] of presets.entries()) {
     const name = document.createElement('strong');
@@ -407,12 +425,7 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
     button.setAttribute('aria-labelledby', name.id);
     button.setAttribute('aria-describedby', neighborhood.id);
     button.append(name, neighborhood);
-    button.addEventListener('click', () => {
-      areaEditor.open = false;
-      areaField.value = String(preset.km);
-      setSelection(preset);
-      showMap({ city });
-    });
+    button.addEventListener('click', () => chooseSavedArea(city));
     cityOptions.append(button);
   }
   areaField.addEventListener('change', () => {
@@ -441,10 +454,10 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
     try {
       const area = inputArea();
       const { latitude, longitude } = area.place;
-      const featured = presets.find(([, preset]) =>
+      const saved = Object.entries(SAVED_AREAS).find(([, preset]) =>
         preset.latitude === latitude && preset.longitude === longitude && preset.km === area.km);
       setSelection(area.place);
-      showMap({ area, city: featured?.[0] });
+      showMap({ area, city: saved?.[0] });
     } catch (error) {
       cancelMapLoad();
       setStatus(error.message);
@@ -488,6 +501,7 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
   });
   $('#export-3mf').addEventListener('click', async () => {
     const credit = attribution();
+    const baseWidth = (model?.base ?? ground).geometry.parameters.width;
     const copy = copyVisibleModel(model?.root || procedural);
     const button = $('#export-3mf');
     button.disabled = true;
@@ -495,7 +509,7 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
     try {
       await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
       const { make3MF } = await import('./export-3mf.js');
-      const result = await make3MF(copy.root, { attribution: credit });
+      const result = await make3MF(copy.root, { attribution: credit, baseWidth });
       download(result.blob, 'pixel-city-color.3mf');
       if (version === statusVersion) setStatus('3MF exported at 160 mm with ' + result.colors + ' material colors.');
     } catch (error) {
@@ -509,6 +523,7 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
   const [, firstPreset] = presets[0];
   areaField.value = String(firstPreset.km);
   setSelection(firstPreset);
+  resetView();
   applyPalette('harvest');
   setMode(false);
   return {

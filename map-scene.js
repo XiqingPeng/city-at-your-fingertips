@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { compactParts } from './assets.js';
 import { landmarkKind, makeLandmark } from './landmarks.js';
-import { BASE_WIDTH, MAP_WIDTH, MapDataError, TOWER_NAMES } from './map-data.mjs';
+import { BASE_WIDTH, MAP_WIDTH, MapDataError, TOWER_NAMES, signedArea } from './map-data.mjs';
 import { terrainMesh } from './terrain.js';
 
 
@@ -19,6 +19,13 @@ function solid(rings, height) {
 
 function material(color, emissive) {
   return new THREE.MeshStandardMaterial({ color, roughness: 1, flatShading: true, emissive });
+}
+
+// Most detail belongs on the footprints that can be resolved at board scale.
+const ROOF_VERTEX_BUDGET = 100_000;
+
+function scalesWithHeight(role) {
+  return role === 'building' || role === 'roof';
 }
 
 function setRole(mesh, role, colorIndex) {
@@ -50,12 +57,17 @@ export async function createMapModel(layout, area, palette, signal) {
   const meters = MAP_WIDTH / (area.km * 1000);
   const ownedGeometries = new Set();
   const buildingMaterials = palette.building.map(color => material(color, '#000000'));
+  const roofMaterials = (palette.roof ?? palette.building).map(color => material(color, '#000000'));
   const roadMaterial = material(palette.road, '#000000');
   const waterMaterial = material(palette.water, '#000000');
-  const roles = new Map(buildingMaterials.map((item, index) => [item, ['building', index]]));
+  const roles = new Map([
+    ...buildingMaterials.map((item, index) => [item, ['building', index]]),
+    ...roofMaterials.map((item, index) => [item, ['roof', index]])
+  ]);
   roles.set(roadMaterial, ['road']);
   roles.set(waterMaterial, ['water']);
 
+  const unusedMaterials = new Set(roles.keys());
   const batches = [];
   const landmarks = [];
   const namedBuildings = new Set(layout.buildings.filter(entry => entry.name)
@@ -86,12 +98,22 @@ export async function createMapModel(layout, area, palette, signal) {
     setRole(base, 'ground');
     root.add(base);
     let buildingCount = 0;
-    for (const entry of layout.buildings) {
+    let roofVertices = 0;
+    // Saved extracts lack the live loader's outer area. Measure each roof
+    // once per build and prioritize the largest surfaces, excluding courtyards.
+    const roofsFirst = layout.buildings.map(entry => {
+      const [outer, ...holes] = entry.rings;
+      const outerArea = entry.area ?? Math.abs(signedArea(outer));
+      const holeArea = holes.reduce((sum, hole) => sum + Math.abs(signedArea(hole)), 0);
+      return { entry, footprintArea: outerArea - holeArea };
+    }).sort((a, b) => b.footprintArea - a.footprintArea);
+    for (const { entry, footprintArea } of roofsFirst) {
       await yieldIfNeeded();
       const colorIndex = buildingColor(entry.id, buildingMaterials.length);
       const height = Math.max(3, entry.height || 6.4);
       const min = Math.min(height - 1, entry.minHeight || 0);
-      const geometry = solid(entry.rings, (height - min) * meters);
+      const span = (height - min) * meters;
+      const geometry = solid(entry.rings, span);
       if (geometry.attributes.position.count < 12) {
         geometry.dispose();
         continue;
@@ -109,6 +131,21 @@ export async function createMapModel(layout, area, palette, signal) {
         batches.push({ mesh, baseY: mesh.position.y, anchors: [anchor], role: 'building', individual: true });
       } else {
         ownedGeometries.add(geometry);
+        const vertices = geometry.attributes.position.count;
+        if (footprintArea >= .13 && span >= .073 && roofVertices + vertices <= ROOF_VERTEX_BUDGET) {
+          // Divide the existing extrusion at its top. Both pieces retain the
+          // mapped outline, holes, height and ground anchor.
+          const cap = Math.min(.12, span * .29);
+          mesh.scale.y = 1 - cap / span;
+          const roofIndex = colorIndex % roofMaterials.length;
+          const roof = new THREE.Mesh(geometry, roofMaterials[roofIndex]);
+          roof.position.y = mesh.position.y + span - cap;
+          roof.scale.y = cap / span;
+          roof.castShadow = true;
+          roof.receiveShadow = true;
+          put(roof, anchor, 'roof', roofIndex);
+          roofVertices += vertices;
+        }
         put(mesh, anchor, 'building', colorIndex);
       }
       buildingCount++;
@@ -145,6 +182,7 @@ export async function createMapModel(layout, area, palette, signal) {
     for (const mesh of compact.children) {
       const [role, index] = roles.get(mesh.material);
       setRole(mesh, role, index);
+      unusedMaterials.delete(mesh.material);
       mesh.userData.terrainMutable = true;
       mesh.frustumCulled = false;
       batches.push({ mesh, anchors: anchorsByMaterial.get(mesh.material), role, baseY: 0 });
@@ -178,9 +216,10 @@ export async function createMapModel(layout, area, palette, signal) {
     return model;
   } catch (error) {
     disposeMapModel(root);
-    [...buildingMaterials, roadMaterial, waterMaterial].forEach(item => item.dispose());
     throw error;
   } finally {
+    // The root owns used batch materials. Dispose those with no geometry.
+    unusedMaterials.forEach(item => item.dispose());
     ownedGeometries.forEach(geometry => geometry.dispose());
     parts.clear();
   }
@@ -188,7 +227,7 @@ export async function createMapModel(layout, area, palette, signal) {
 
 function updateBatch(batch, elevation, height) {
   const { mesh, anchors, baseY, role } = batch;
-  const multiplier = role === 'building' ? height : 1;
+  const multiplier = scalesWithHeight(role) ? height : 1;
   if (batch.individual) {
     const [x, z] = anchors[0];
     mesh.position.y = baseY * multiplier + (elevation?.sample(x, z) ?? 0);
@@ -221,7 +260,7 @@ export function setMapHeight(model, height) {
   if (Math.abs(model.height - height) < .0001) return;
   model.height = height;
   for (const batch of model.batches) {
-    if (batch.role === 'building') updateBatch(batch, model.elevation, height);
+    if (scalesWithHeight(batch.role)) updateBatch(batch, model.elevation, height);
   }
 }
 

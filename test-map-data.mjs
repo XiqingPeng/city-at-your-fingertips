@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
-  MAP_WIDTH, OSM_LICENSE, PRESETS, PRESET_LIMITS, MapDataError, clipSegment, loadLiveArea, loadPreset, makeArea,
+  MAP_WIDTH, OSM_LICENSE, OVERVIEW_KEY, PRESETS, PRESET_LIMITS, SAVED_AREAS, MapDataError, clipSegment, loadLiveArea, loadPreset, makeArea,
   osmFeatures, prepareArea, withDeadline
 } from './map-data.mjs';
 import { tilesForArea, vectorFeatures } from './map-tiles.mjs';
@@ -30,7 +30,7 @@ function verifyPoint(point) {
 }
 
 test('the area center, crop edges and physical scale follow the selected coordinates', () => {
-  for (const km of [.5, 1, 2, 4]) {
+  for (const km of [.5, 1, 2, 4, 8]) {
     const region = makeArea({ latitude: 58.032, longitude: 17.238 }, km);
     const [south, west, north, east] = region.bounds;
     assert.deepEqual(region.project([17.238, 58.032]), [0, 0]);
@@ -42,7 +42,7 @@ test('the area center, crop edges and physical scale follow the selected coordin
   }
   assert.throws(() => makeArea({ latitude: NaN, longitude: 5 }, 2), { code: 'coordinates' });
   assert.throws(() => makeArea({ latitude: 20, longitude: 181 }, 2), { code: 'coordinates' });
-  assert.throws(() => makeArea({ latitude: 20, longitude: 0 }, 8), { code: 'coordinates' });
+  assert.throws(() => makeArea({ latitude: 20, longitude: 0 }, 8.01), { code: 'coordinates' });
 });
 
 test('the date-line crop uses both valid query ranges and adjacent Mercator tiles', () => {
@@ -56,6 +56,43 @@ test('the date-line crop uses both valid query ranges and adjacent Mercator tile
   assert.ok(x.has(0) && x.has(16383));
   const polar = makeArea({ latitude: 85, longitude: 0 }, 4);
   assert.throws(() => tilesForArea(polar), { code: 'large' });
+});
+
+test('a wider square fits the tile budget with full corner-to-corner coverage', () => {
+  for (const place of [PRESETS.Shanghai, { latitude: 48, longitude: 179.99 }]) {
+    const region = makeArea(place, 8);
+    const tiles = tilesForArea(region);
+    assert.ok(tiles.length >= 9 && tiles.length <= 20);
+    assert.ok(tiles.every(tile => tile.z === 13));
+    assert.equal(new Set(tiles.map(({ x, y }) => x + '/' + y)).size, tiles.length);
+    const [south, west, north, east] = region.bounds;
+    for (const lat of [south, region.place.latitude, north]) {
+      for (const lon of [west, region.place.longitude, east]) {
+        const wrapped = lon > 180 ? lon - 360 : lon;
+        assert.ok(tiles.some(({ bounds: [left, bottom, right, top] }) =>
+          left <= wrapped && wrapped <= right && bottom <= lat && lat <= top), 'covers ' + [lat, lon]);
+      }
+    }
+  }
+  const saved = tilesForArea(makeArea(PRESETS.Shanghai, 8), 36);
+  assert.equal(saved.length, 25);
+  assert.ok(saved.every(tile => tile.z === 14));
+});
+
+test('road sampling keeps major routes in each occupied part of a wide square', () => {
+  const wide = makeArea({ latitude: 0, longitude: 0 }, 8);
+  const data = osmFeatures({ elements: [footprint] }, 'example');
+  const route = (id, x, y, roadClass) => ({ id, class: roadClass, line: [[x, y], [x + .002, y]] });
+  data.roads = [
+    ...Array.from({ length: 100 }, (_, index) => route('dense-' + index, -.027, .027, 'minor')),
+    route('NW', -.027, .027, 'primary'),
+    route('NE', .027, .027, 'primary'),
+    route('SE', .027, -.027, 'primary'),
+    route('SW', -.027, -.027, 'primary')
+  ];
+  const layout = prepareArea(data, wide, { ...PRESET_LIMITS, roads: 4 });
+  assert.deepEqual(new Set(layout.roads.map(road => road.id)), new Set(['NW', 'NE', 'SE', 'SW']));
+  assert.ok(layout.roads.every(road => road.width === .05));
 });
 
 test('clip keeps roads crossing the square with both endpoints outside', () => {
@@ -170,6 +207,33 @@ test('manual cancellation ignores a late response and never starts a fallback en
   assert.equal(requests, 1);
 });
 
+test('a failed tile cancels the sibling downloads and rejects the square', async () => {
+  const started = [];
+  const template = 'https://tiles.openfreemap.org/testing/{z}/{x}/{y}.pbf';
+  await assert.rejects(vectorFeatures(area, undefined, {
+    template,
+    fetcher: async (_url, { signal }) => {
+      started.push(signal);
+      if (started.length === 1) return new Response(null, { status: 503 });
+      return new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    },
+    decoder: () => assert.fail('Incomplete tiles must not be decoded')
+  }), { code: 'http' });
+  assert.equal(started.length, 4);
+  assert.ok(started.every(signal => signal.aborted));
+});
+
+test('an unavailable 8 km tile set never sends an Overpass query or changes the requested area', async () => {
+  const wide = makeArea(PRESETS.Tokyo, 8);
+  await assert.rejects(loadLiveArea(wide, undefined, {
+    fetcher: () => assert.fail('Overpass contacted for the 8 km square'),
+    vectorLoader: async requested => {
+      assert.equal(requested.key, wide.key);
+      throw new MapDataError('large', 'Too many tiles');
+    }
+  }), { code: 'large' });
+});
+
 test('vector catalog accepts a new official release path and rejects unfamiliar hosts', async () => {
   const origin = 'https://tiles.openfreemap.org/';
   const template = origin + 'current/{z}/{x}/{y}.pbf';
@@ -225,6 +289,32 @@ test('the six city choices load licensed local extracts for distinct neighborhoo
   }
   assert.equal(areas.size, Object.keys(expected).length);
   assert.equal(footprints.size, Object.keys(expected).length);
+});
+
+test('the saved Shanghai overview contains building and street geometry across its 8 km square', async () => {
+  const { area: region, layout } = await loadPreset(OVERVIEW_KEY, undefined, async url => {
+    assert.equal(url.href, new URL('./map-data/' + SAVED_AREAS[OVERVIEW_KEY].file, import.meta.url).href);
+    return new Response(await readFile(url));
+  });
+  assert.equal(region.place.name, 'Shanghai');
+  assert.equal(region.km, 8);
+  assert.equal(layout.source.license, OSM_LICENSE);
+  const expectedUrls = tilesForArea(region, 36).map(({ z, x, y }) => layout.source.template
+    .replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y)));
+  assert.deepEqual(layout.source.urls, expectedUrls);
+  assert.ok(layout.buildings.length <= PRESET_LIMITS.buildings);
+  assert.ok(layout.roads.length <= PRESET_LIMITS.roads);
+  assert.ok(layout.water.length > 20);
+  for (const x of [-1, 1]) {
+    for (const y of [-1, 1]) {
+      assert.ok(layout.buildings.filter(({ anchor: [a, b] }) => a * x > half / 2 && b * y > half / 2).length > 20);
+      assert.ok(layout.roads.filter(({ line }) => line.every(([a, b]) => a * x > half / 2 && b * y > half / 2)).length > 20);
+    }
+  }
+  assert.ok(layout.landmarks.some(item => item.name === 'Oriental Pearl Tower'));
+  await assert.rejects(loadPreset(OVERVIEW_KEY, undefined, async () => new Response(
+    await readFile(new URL('./map-data/shanghai.json', import.meta.url))
+  )), { code: 'invalid' });
 });
 
 test('Shanghai places the Oriental Pearl Tower at its footprint', async () => {

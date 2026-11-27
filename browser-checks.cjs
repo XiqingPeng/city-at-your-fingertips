@@ -93,6 +93,60 @@ test('all six places can be picked without search or any external request', asyn
   assert.deepEqual(outsideRequests, []);
 });
 
+test('the one-click 8 km Shanghai overview works with external services blocked', async () => {
+  const overview = { city: 'Shanghai', neighborhood: 'Huangpu River' };
+  await openExhibit();
+  await page.getByRole('button', { name: 'Pause tour' }).click();
+  const panel = await openMap();
+  const snapshot = new URL('map-data/shanghai-8km.json', site);
+  const [response] = await Promise.all([
+    page.waitForResponse(reply => reply.url() === snapshot.href),
+    panel.getByRole('button', { name: 'Shanghai · 8 × 8 km', exact: true }).click()
+  ]);
+  assert.ok(response.ok());
+  await checkSavedNeighborhood(overview);
+  assert.match(await page.locator('#scene-description').innerText(), /8 × 8 km OpenStreetMap/);
+  assert.deepEqual(outsideRequests, []);
+
+  await openMap();
+  await panel.getByText('Adjust map area', { exact: true }).click();
+  assert.equal(await panel.getByRole('combobox', { name: 'Area size' }).inputValue(), '8');
+  await panel.getByRole('button', { name: 'Load selected area' }).click();
+  await checkSavedNeighborhood(overview);
+  assert.ok(outsideRequests.every(url => !url.includes('openfreemap.org') && !url.includes('interpreter')));
+});
+
+test('bundled map footprints receive color roofs at both map widths', async () => {
+  await openExhibit();
+  const maps = await page.evaluate(async () => {
+    const { loadPreset, OVERVIEW_KEY } = await import('./map-data.mjs');
+    const { createMapModel, disposeMapModel } = await import('./map-scene.js');
+    const palette = {
+      building: ['#efdbb8'], roof: ['#cd7455'], ground: '#96a181', road: '#ead1aa', water: '#34879d'
+    };
+    const result = [];
+    for (const city of ['Tokyo', OVERVIEW_KEY]) {
+      const signal = new AbortController().signal;
+      const { layout, area } = await loadPreset(city, signal);
+      const model = await createMapModel(layout, area, palette, signal);
+      const roofs = model.batches.filter(batch => batch.role === 'roof');
+      result.push({
+        km: area.km,
+        buildingCount: model.buildingCount,
+        expectedBuildings: layout.buildings.length,
+        roofVertices: roofs.reduce((sum, { mesh }) => sum + mesh.geometry.attributes.position.count, 0)
+      });
+      disposeMapModel(model.root);
+    }
+    return result;
+  });
+  assert.deepEqual(maps.map(map => map.km), [2, 8]);
+  for (const map of maps) {
+    assert.equal(map.buildingCount, map.expectedBuildings);
+    assert.ok(map.roofVertices > 0, map.km + ' km sample has colored roofs');
+  }
+});
+
 test('the area editor reloads each exact saved square with external services blocked', async () => {
   await openExhibit();
   await page.getByRole('button', { name: 'Pause tour' }).click();
@@ -142,7 +196,7 @@ test('manual coordinates and size reach the custom area loader', async () => {
     release();
   }
   await page.getByRole('heading', { name: '35.6600, 139.7500', exact: true }).waitFor();
-  assert.match(await page.locator('#scene-description').innerText(), /from your 1 km OpenStreetMap selection/);
+  assert.match(await page.locator('#scene-description').innerText(), /from your 1 × 1 km OpenStreetMap selection/);
   const latRadius = .5 / 111.32;
   const lonRadius = latRadius / Math.cos(latitude * Math.PI / 180);
   const bounds = [latitude - latRadius, longitude - lonRadius, latitude + latRadius, longitude + lonRadius];
@@ -385,4 +439,28 @@ test('restoring a lost graphics context gives the current stop a fresh interval'
   assert.equal(await page.locator('#scene-name').innerText(), 'Canal Quarter');
   await page.getByRole('heading', { name: /Tokyo/ }).waitFor({ timeout: 45_000 });
   assert.ok(Date.now() - restoredAt >= 29_500, 'Resuming should give the current stop a full interval');
+});
+
+test('the hand tutorial includes its artwork and a printable guide before camera access', async () => {
+  await openExhibit();
+  await page.getByRole('button', { name: 'Hand controls', exact: true }).click();
+  const help = page.getByRole('complementary', { name: 'Hand controls' });
+  await help.getByRole('button', { name: 'Start camera' }).waitFor();
+  const sprites = await help.locator('#gesture-demo image').all();
+  assert.equal(sprites.length, 2);
+  for (const image of sprites) {
+    const url = new URL(await image.getAttribute('href'), site);
+    const response = await page.request.get(url.href);
+    assert.equal(url.origin, site.origin);
+    assert.ok(response.ok());
+    assert.equal((await response.body()).subarray(1, 4).toString(), 'PNG');
+  }
+  const guide = help.getByRole('link', { name: /A4 gesture guide/ });
+  const [download] = await Promise.all([page.waitForEvent('download'), guide.click()]);
+  assert.equal(download.suggestedFilename(), 'gesture-guide-a4.pdf');
+  const stream = await download.createReadStream();
+  const chunks = [];
+  for await (const chunk of stream) chunks.push(chunk);
+  assert.equal(Buffer.concat(chunks).subarray(0, 5).toString(), '%PDF-');
+  assert.deepEqual(outsideRequests, []);
 });

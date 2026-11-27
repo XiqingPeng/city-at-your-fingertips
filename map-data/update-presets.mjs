@@ -1,5 +1,5 @@
 import { writeFile } from 'node:fs/promises';
-import { makeArea, prepareArea, PRESETS, PRESET_LIMITS, TOWER_NAMES, withDeadline } from '../map-data.mjs';
+import { makeArea, prepareArea, SAVED_AREAS, PRESET_LIMITS, TOWER_NAMES, withDeadline } from '../map-data.mjs';
 import { makeDecoder, vectorFeatures } from '../map-tiles.mjs';
 
 function addOrientalPearlTower(layout) {
@@ -13,24 +13,26 @@ function addOrientalPearlTower(layout) {
   layout.landmarks = [tower, ...landmarks].slice(0, PRESET_LIMITS.landmarks);
 }
 
+// Prepare the saved city overview with detailed footprints and heights.
+const SAVED_TILE_LIMIT = 36;
 const args = process.argv.slice(2);
 const template = args[0]?.startsWith('https://') ? args.shift() : undefined;
-const cities = args.length ? [...new Set(args)] : Object.keys(PRESETS);
+const cities = args.length ? [...new Set(args)] : Object.keys(SAVED_AREAS);
 for (const city of cities) {
-  if (!Object.hasOwn(PRESETS, city)) throw new Error('Unknown preset city: ' + city);
+  if (!Object.hasOwn(SAVED_AREAS, city)) throw new Error('Unknown preset city: ' + city);
 }
 const decoder = await makeDecoder();
 const files = [];
 
 for (const city of cities) {
-  const preset = PRESETS[city];
+  const preset = SAVED_AREAS[city];
   const area = makeArea(preset, preset.km);
   const data = await withDeadline(undefined, 30000, signal => vectorFeatures(area, signal, {
-    decoder, template, userAgent: 'PixelCityStudio/1.0 (github.com/XiqingPeng/city-at-your-fingertips)'
+    decoder, template, tileLimit: SAVED_TILE_LIMIT, userAgent: 'PixelCityStudio/1.0 (github.com/XiqingPeng/city-at-your-fingertips)'
   }));
   if (!data.source.timestamp) throw new Error('Use a dated tile release to create traceable preset data.');
   const layout = prepareArea(data, area, PRESET_LIMITS);
-  if (city === 'Shanghai') addOrientalPearlTower(layout);
+  if (preset.name === 'Shanghai') addOrientalPearlTower(layout);
   const snapshot = {
     format: 1,
     area: { latitude: preset.latitude, longitude: preset.longitude, km: preset.km },

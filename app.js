@@ -27,10 +27,10 @@ controls.update();
 
 const hemisphere = new THREE.HemisphereLight(0xf7fff5, 0x728e79, 2);
 const sun = new THREE.DirectionalLight(0xfff7dd, 2.2);
-sun.position.set(-8, 26, 12);
+sun.position.set(-12, 39, 18);
 sun.castShadow = true;
 sun.shadow.mapSize.set(1024, 1024);
-Object.assign(sun.shadow.camera, { left: -33, right: 33, top: 33, bottom: -33, far: 85 });
+Object.assign(sun.shadow.camera, { left: -40, right: 40, top: 40, bottom: -40, far: 100 });
 sun.shadow.camera.updateProjectionMatrix();
 sun.shadow.bias = -0.00035;
 scene.add(hemisphere, sun);
@@ -189,7 +189,7 @@ function onSceneChange(change) {
     manualMap = {
       city,
       name: change.name || city || 'Selected neighborhood',
-      description: 'Buildings and streets from your ' + change.km + ' km OpenStreetMap selection.'
+      description: 'Buildings and streets from your ' + change.km + ' × ' + change.km + ' km OpenStreetMap selection.'
     };
   } else {
     manualMap = null;

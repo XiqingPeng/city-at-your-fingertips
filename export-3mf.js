@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 
 // 3MF Core package: one mesh object per material color, in millimeters.
-export async function make3MF(root, {attribution} = {}){
+export async function make3MF(root, {attribution, baseWidth = 42} = {}){
   const {zipSync,strToU8}=await import('https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js');
-  root.updateWorldMatrix(true,true);const groups=new Map(),point=new THREE.Vector3(),factor=160/42;let lowest=Infinity,total=0;
+  root.updateWorldMatrix(true,true);const groups=new Map(),point=new THREE.Vector3(),factor=160/baseWidth;let lowest=Infinity,total=0;
   root.traverseVisible(mesh=>{
     if(!mesh.isMesh||!mesh.geometry?.attributes.position)return;
     const position=mesh.geometry.attributes.position,index=mesh.geometry.index,material=Array.isArray(mesh.material)?mesh.material[0]:mesh.material;
