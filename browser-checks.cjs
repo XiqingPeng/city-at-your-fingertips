@@ -399,8 +399,22 @@ for (const place of [null, places[0]]) {
       level = raised;
     }
 
-    keepsHeight(await move(start, start, { duration: 850 }), level, 'The pause before reversing does not move the buildings');
-    await Promise.all([move(start, pressed), showHint('lowering')]);
+    // Start a fresh small stroke after a regular lift. The rebound is
+    // shorter than the upward motion and there is no pause between pulses.
+    let bottom = start;
+    const beforePulses = level;
+    for (let stroke = 0; stroke < 4; stroke++) {
+      const top = bottom - .023;
+      const samples = await move(bottom, top, { duration: 300 });
+      assert.ok(samples.every(sample => sample >= level), 'A small lift never lowers the buildings');
+      level = await height();
+      bottom = top + .017;
+      keepsHeight(await move(top, bottom, { duration: 260 }), level, 'The small rebound keeps the new height');
+    }
+    assert.ok(level >= beforePulses + 3, 'Small repeated lifts accumulate visible height');
+
+    keepsHeight(await move(bottom, bottom, { duration: 850 }), level, 'The pause before reversing does not move the buildings');
+    await Promise.all([move(bottom, pressed), showHint('lowering')]);
     const lowered = await height();
     assert.ok(lowered < level - 3, 'After pausing, a downward press lowers the buildings');
     keepsHeight(await move(pressed, start, { duration: 230 }), lowered, 'A quick upward return after pressing preserves height');

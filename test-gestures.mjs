@@ -103,6 +103,71 @@ test('short downward returns preserve height and repeated lifts accumulate', () 
   }
 });
 
+test('repeated palm lifts accumulate with a short rebound and no pause between lifts', () => {
+  for (const interval of [30, 45, 65]) {
+    const hand = simulate();
+    let bottom = .66;
+    hold(hand, bottom);
+    for (let i = 0; i < 6; i++) {
+      const before = hand.height;
+      const top = bottom - .020;
+      onlyChanges(move(hand, bottom, top, 4, interval), 'height');
+      assert.ok(hand.height > before + .006, `lift ${i + 1} should raise the buildings`);
+      const raised = hand.height;
+      bottom = top + .013;
+      onlyChanges(move(hand, top, bottom, 3, interval));
+      assert.equal(hand.height, raised);
+    }
+    assert.ok(hand.height >= .49);
+    const raised = hand.height;
+    freezes(hold(hand, bottom, 15));
+    move(hand, bottom, bottom + .10);
+    assert.ok(hand.height < raised - .07);
+  }
+});
+
+test('an isolated upward jump during a small lift does not count as extra travel', () => {
+  const hand = simulate();
+  hold(hand, .66);
+  move(hand, .66, .636, 4);
+  const raised = hand.height;
+  assert.ok(raised > .45);
+  freezes([hand.step(.58), hand.step(.636)]);
+  near(hand.height, raised, .0001);
+  freezes(move(hand, .636, .66, 4));
+  move(hand, .66, .64, 4);
+  assert.ok(hand.height > raised);
+});
+
+test('brief uncertain palm frames keep the stroke while sustained loss requires a new baseline', () => {
+  const hand = simulate();
+  hold(hand, .66);
+  for (let i = 0; i < 4; i++) {
+    const before = hand.height;
+    hand.step(.654);
+    freezes([hand.step(.647, { pose: 'None', hand: flexedHand() })]);
+    hand.step(.643);
+    hand.step(.640);
+    assert.ok(hand.height > before + .006);
+    freezes(move(hand, .64, .66, 4));
+  }
+  const raised = hand.height;
+  for (let i = 0; i < 5; i++) {
+    assert.deepEqual(hand.step(.65, { pose: 'None', hand: flexedHand() }), { state: 'rest' });
+  }
+  freezes(move(hand, .65, .54, 5));
+  assert.equal(hand.height, raised);
+});
+
+test('repeated small diagonal pulses neither lift buildings nor grow the forest', () => {
+  const hand = simulate();
+  hold(hand, .66);
+  for (let i = 0; i < 6; i++) {
+    onlyChanges(movePalm(hand, [.5, .66], [.514, .642], 4));
+    onlyChanges(movePalm(hand, [.514, .642], [.5, .66], 3));
+  }
+});
+
 test('about half a second of stillness permits pressing and short upward returns preserve it', () => {
   const hand = simulate();
   hold(hand, .66);

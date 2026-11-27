@@ -8,10 +8,14 @@ const MIN_GAP_LIMIT = 180;
 const MAX_GAP_LIMIT = 625;
 const STILL_VERTICAL = 0.011;
 const PAUSE_VERTICAL_RANGE = 0.003;
+const PAUSE_MOTION_RANGE = 0.010;
 const PAUSE_SPEED = 0.000004;
 const SIDEWAYS_TRAVEL = 0.018;
 const STROKE_START = 0.018;
 const CONFIRM_INTERVAL = 120;
+const LIFT_START = 0.013;
+const LIFT_RETURN = 0.009;
+const LIFT_STEP = 0.0035;
 const RETURN_TRAVEL = 0.024;
 const RETURN_FRACTION = 0.4;
 const HEIGHT_STEP = 0.007;
@@ -67,12 +71,16 @@ function hasOpenPalmGeometry(hand) {
     FINGER_BASES.every(base => isExtended(hand, base, axis, size));
 }
 
+function isIncompatiblePose(pose) {
+  return (pose?.categoryName === 'Closed_Fist' && pose.score >= 0.65) ||
+    (OTHER_POSES.has(pose?.categoryName) && pose.score >= 0.75);
+}
+
 function isOpenPalm(result, imageLandmarks, index) {
   const pose = result.gestures?.[index]?.[0];
   const agrees = pose?.categoryName === 'Open_Palm';
   if (agrees && pose.score >= 0.75) return true;
-  if ((pose?.categoryName === 'Closed_Fist' && pose.score >= 0.65) ||
-      (OTHER_POSES.has(pose?.categoryName) && pose.score >= 0.75)) return false;
+  if (isIncompatiblePose(pose)) return false;
 
   const worldLandmarks = result.worldLandmarks?.[index];
   if (!hasLandmarks(worldLandmarks)) return hasOpenPalmGeometry(imageLandmarks);
@@ -162,6 +170,8 @@ function keepsMoving(samples) {
   if (samples.length < 5) return false;
   let previousY = (samples[0].y + samples[1].y) / 2;
   let min = previousY, max = previousY;
+  let rawMin = Math.min(samples[0].y, samples[1].y);
+  let rawMax = Math.max(samples[0].y, samples[1].y);
   let path = 0, moving = 0;
   // Sustained travel covers most of the window with room for one reversal.
   // Average adjacent wrist positions before measuring it.
@@ -172,11 +182,14 @@ function keepsMoving(samples) {
     if (step >= PAUSE_SPEED * (samples[i].time - samples[i - 1].time)) moving++;
     min = Math.min(min, y);
     max = Math.max(max, y);
+    rawMin = Math.min(rawMin, samples[i].y);
+    rawMax = Math.max(rawMax, samples[i].y);
     previousY = y;
   }
   const range = max - min;
-  return range >= PAUSE_VERTICAL_RANGE &&
-    path <= 2 * range + Number.EPSILON && moving * 2 > samples.length - 2;
+  return rawMax - rawMin >= PAUSE_MOTION_RANGE ||
+    (range >= PAUSE_VERTICAL_RANGE &&
+     path <= 2 * range + Number.EPSILON && moving * 2 > samples.length - 2);
 }
 
 export function createGestureMapper() {
@@ -341,33 +354,53 @@ export function createGestureMapper() {
 
     const vertical = origin.y - palm.y;
     const strokeDirection = direction || Math.sign(vertical);
+    const lifting = strokeDirection > 0;
     const travel = strokeDirection * vertical;
     const previousTravel = strokeDirection * (origin.y - previous.y);
-    // Nearby camera frames should agree on the start of a stroke.
-    // Sparse tracks can travel a substantial distance between observations.
     const needsConfirmation = elapsed <= CONFIRM_INTERVAL;
-    const confirmed = !needsConfirmation || previousTravel >= STROKE_START / 2;
+    const fullStroke = travel >= STROKE_START + HEIGHT_STEP;
+    const small = lifting && travel < 2 * STROKE_START;
+    // A sudden extra jump needs another sample, even during a lift.
+    const earlier = recent.at(-3);
+    const precedingRise = earlier ? earlier.y - previous.y : 0;
+    const jump = lifting && needsConfirmation &&
+      travel - previousTravel > Math.max(STROKE_START + HEIGHT_STEP, 2.5 * precedingRise);
+    // Small upstrokes need two agreeing samples even on a slow camera.
+    const confirmed = !jump && ((!needsConfirmation && fullStroke) ||
+      previousTravel >= (small ? LIFT_START / 3 : STROKE_START / 2));
+    // Short upward travel must be clearly vertical so a wave or a
+    // diagonal still can't start a height change.
+    const shortLift = lifting && travel >= LIFT_START &&
+      travel >= 1.6 * Math.abs(palm.x - origin.x);
     if (!direction) {
-      if (travel < STROKE_START + HEIGHT_STEP || !confirmed) return { state: 'ready' };
+      if ((!fullStroke && !shortLift) || !confirmed) return { state: 'ready' };
       direction = strokeDirection;
       lastAdvance = palm;
     }
 
     const state = direction > 0 ? 'lifting' : 'lowering';
-    const returnDistance = Math.max(RETURN_TRAVEL, peak * RETURN_FRACTION);
-    if (travel < 0 || peak - travel >= returnDistance) {
-      // A real return opens a fresh stroke. A brief retreat near the peak keeps
-      // its credited progress so the rebound cannot add it a second time.
-      if (peak === 0 || !needsConfirmation || peak - previousTravel >= returnDistance / 2) {
-        beginStroke(palm);
+    const returnDistance = Math.max(lifting ? LIFT_RETURN : RETURN_TRAVEL, peak * RETURN_FRACTION);
+    const returned = peak - travel;
+    const previousReturn = peak - previousTravel;
+    // On a short return, the turn may fall between two camera frames.
+    const recovering = lifting && peak < 2 * STROKE_START &&
+      previousReturn >= returnDistance && returned >= returnDistance / 3;
+    if (travel < 0 || returned >= returnDistance || recovering) {
+      // Require evidence of the return in two nearby samples, then rebase
+      // on whichever is closer to the bottom of the stroke.
+      if (peak === 0 || !needsConfirmation || previousReturn >= returnDistance / 2) {
+        beginStroke(recovering && previousTravel < travel ? previous : palm);
       }
       return { state };
     }
 
-    peak = Math.max(peak, travel);
-    const progress = Math.max(0, travel - STROKE_START);
+    if (lifting && !confirmed) return { state };
+    // Small lifts still contribute before covering a full stroke.
+    const progress = small ? travel * 0.5 : Math.max(0, travel - STROKE_START);
     const gain = progress - credited;
-    if (gain < HEIGHT_STEP || (!credited && !confirmed)) return { state };
+    peak = Math.max(peak, travel);
+    if (gain < (small ? LIFT_STEP : HEIGHT_STEP) ||
+        (!credited && (!confirmed || (!fullStroke && !shortLift)))) return { state };
     credited = progress;
     lastAdvance = palm;
     startWave(palm);
@@ -389,14 +422,18 @@ export function createGestureMapper() {
       resetSingle();
       return { state: hands.length > 1 ? 'ambiguous' : 'idle' };
     }
-    if (!isOpenPalm(result, hands[0], 0)) {
-      resetSingle();
-      return { state: 'rest' };
-    }
     const palm = palmSample(hands[0], result.handedness?.[0]?.[0], now);
     if (!inFrame(palm)) {
       resetSingle();
       return { state: 'idle' };
+    }
+    if (!isOpenPalm(result, hands[0], 0)) {
+      // A brief pose flicker can interrupt a flat palm at the top of a lift.
+      // Keep its baseline without acting on the unconfirmed sample.
+      if (!origin || now - lastPalm.time > CONFIRM_INTERVAL ||
+          isIncompatiblePose(result.gestures?.[0]?.[0]) ||
+          isDiscontinuous(lastPalm, palm, frameInterval)) resetSingle();
+      return { state: 'rest' };
     }
     return updateSingle(palm, now, currentHeight, currentForest);
   }
