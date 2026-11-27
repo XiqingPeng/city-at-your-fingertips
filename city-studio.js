@@ -85,7 +85,7 @@ function creditImage(source, credit) {
   return canvas;
 }
 
-export function setupStudio({ scene, renderer, camera, controls, procedural, realRoot, ground, roadMat, current, dayNight, onSceneChange }) {
+export function setupStudio({ scene, renderer, camera, controls, procedural, realRoot, ground, roadMat, current, dayNight, onSceneChange, onViewChange }) {
   const status = $('#map-status');
   const statusFooter = status.closest('.panel-status');
   const progressBar = $('#map-progress');
@@ -169,6 +169,7 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
     camera.position.copy(initial.position).sub(initial.target).multiplyScalar(scale).add(initial.target);
     camera.up.set(0, 1, 0);
     controls.update();
+    onViewChange();
   }
 
   function cancelMapLoad() {
@@ -399,6 +400,7 @@ export function setupStudio({ scene, renderer, camera, controls, procedural, rea
     controls.target.set(0, 0, 0);
     camera.position.set(.01, 72 * scale, .01);
     controls.update();
+    onViewChange();
     $('#toggle-view span').textContent = '3D view';
   });
   $('#imaginary').addEventListener('click', () => showGenerated());

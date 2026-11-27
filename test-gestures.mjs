@@ -42,20 +42,22 @@ function frame(y, {
   };
 }
 
-function simulate({ height = .45, ...defaults } = {}) {
+function simulate({ height = .45, forest = .15, ...defaults } = {}) {
   const mapper = createGestureMapper();
   let time = 0;
   function advance(result, elapsed = 40) {
     time += elapsed;
-    const reply = mapper.update(result, time, height);
+    const reply = mapper.update(result, time, height, forest);
     if (reply.height !== undefined) height = reply.height;
+    if (reply.forest !== undefined) forest = reply.forest;
     return reply;
   }
   return {
     step(y, options = {}, elapsed = 40) { return advance(frame(y, { ...defaults, ...options }), elapsed); },
     advance,
     reset: mapper.reset,
-    get height() { return height; }
+    get height() { return height; },
+    get forest() { return forest; }
   };
 }
 
@@ -232,7 +234,7 @@ test('loss, a second hand, a switch, a jump or a frame gap freeze and require a 
   damaged.landmarks[0][9].x = NaN;
   for (const [result, elapsed, state] of [
     [{ landmarks: [] }, 35, 'idle'],
-    [twoHands, 35, 'ambiguous'],
+    [twoHands, 35, 'two-hands'],
     [frame(.54, { side: 'Left' }), 35, 'ready'],
     [frame(.43), 35, 'ready'],
     [frame(.52, { scale: .5 }), 35, 'ready'],
@@ -372,4 +374,175 @@ test('about half a second of small uneven jitter still lets the hand reverse dir
       near(raised - hand.height, .102);
     }
   }
+});
+
+
+function pairedFrame([[x1, y1], [x2, y2]], secondOptions = {}) {
+  const first = frame(y1, { x: x1, side: 'Left' });
+  const second = frame(y2, { x: x2, side: 'Right', ...secondOptions });
+  return Object.fromEntries(Object.keys(first).map(key => [key, [first[key][0], second[key][0]]]));
+}
+
+function holdPair(driver, position) {
+  return Array.from({ length: 4 }, () => driver.advance(pairedFrame(position)));
+}
+
+function movePair(driver, from, to, { frames = 10, elapsed = 40, reorder = false } = {}) {
+  return Array.from({ length: frames }, (_, i) => {
+    const fraction = (i + 1) / frames;
+    const positions = from.map(([x, y], index) => [
+      x + fraction * (to[index][0] - x), y + fraction * (to[index][1] - y)
+    ]);
+    const result = pairedFrame(positions);
+    if (reorder && i % 2 === 0) {
+      for (const tracks of Object.values(result)) tracks.reverse();
+    }
+    return driver.advance(result, elapsed);
+  });
+}
+
+function movePalm(driver, [x, y], [endX, endY], frames = 6, elapsed = 40) {
+  return Array.from({ length: frames }, (_, i) => {
+    const fraction = (i + 1) / frames;
+    return driver.step(y + fraction * (endY - y), { x: x + fraction * (endX - x) }, elapsed);
+  });
+}
+
+function onlyChanges(events, key) {
+  for (const name of ['height', 'forest', 'zoomDelta', 'panDelta']) {
+    if (name === key) continue;
+    assert.ok(events.every(event => event[name] === undefined), 'unexpected change to ' + name);
+  }
+}
+
+test('moderate open-palm recognition and straight image fingers recover a distorted world hand', () => {
+  for (const [pose, state] of [['Open_Palm', 'ready'], ['None', 'rest'], ['Closed_Fist', 'rest']]) {
+    const hand = frame(.61, { pose, score: pose === 'Open_Palm' ? .60 : .9, useWorld: true });
+    hand.worldLandmarks[0][6].z = .1;
+    assert.deepEqual(simulate().advance(hand), { state });
+  }
+});
+
+test('opposed open palms zoom in and out without panning despite unequal travel and reordered detections', () => {
+  const hand = simulate();
+  const close = [[.35, .61], [.65, .61]];
+  const wide = [[.23, .61], [.72, .61]];
+  onlyChanges(holdPair(hand, close));
+  for (const [start, end, sign] of [[close, wide, 1], [wide, close, -1]]) {
+    const events = movePair(hand, start, end, { reorder: true });
+    onlyChanges(events, 'zoomDelta');
+    const zoom = events.filter(event => event.zoomDelta !== undefined);
+    assert.ok(zoom.length > 1 && zoom.every(event => event.state === 'zooming'));
+    near(zoom.reduce((sum, event) => sum + event.zoomDelta, 0), sign * .19 * 1.7, .03);
+  }
+});
+
+test('two hands moving together pan on both axes without coupling to their changing spread', () => {
+  const hand = simulate();
+  const start = [[.25, .62], [.63, .59]];
+  const end = [[.37, .51], [.78, .49]];
+  holdPair(hand, start);
+  const events = movePair(hand, start, end);
+  onlyChanges(events, 'panDelta');
+  const pan = events.filter(event => event.panDelta);
+  assert.ok(pan.length > 1 && pan.every(event => event.state === 'panning'));
+  near(pan.reduce((sum, event) => sum + event.panDelta.x, 0), .135);
+  near(pan.reduce((sum, event) => sum + event.panDelta.y, 0), -.105);
+});
+
+test('a lagging hand and a rotating pair do not cause zoom', () => {
+  const hand = simulate();
+  const start = [[.30, .60], [.66, .60]];
+  const oneMoved = [[.36, .60], [.66, .60]];
+  holdPair(hand, start);
+  onlyChanges(movePair(hand, start, oneMoved));
+  const panned = movePair(hand, oneMoved, [[.47, .60], [.80, .60]]);
+  onlyChanges(panned, 'panDelta');
+  assert.ok(panned.some(event => event.panDelta?.x > 0));
+
+  const rotating = simulate();
+  holdPair(rotating, start);
+  for (let i = 1; i <= 16; i++) {
+    const angle = i * Math.PI / 32;
+    const x = .18 * Math.cos(angle), y = .24 * Math.sin(angle);
+    onlyChanges([rotating.advance(pairedFrame([[.48 - x, .60 - y], [.48 + x, .60 + y]]))]);
+  }
+});
+
+test('pair entry, frame gaps, closed palms and leaving the frame discard motion references', () => {
+  const hand = simulate();
+  const start = [[.3, .64], [.7, .64]];
+  const end = [[.2, .64], [.8, .64]];
+  hold(hand, .66);
+  move(hand, .66, .54);
+  assert.deepEqual(hand.advance(pairedFrame(start)), { state: 'two-hands' });
+  assert.deepEqual(hand.advance(pairedFrame(end)), { state: 'two-hands' });
+  holdPair(hand, end);
+  assert.deepEqual(hand.advance(pairedFrame(start), 700), { state: 'two-hands' });
+  holdPair(hand, start);
+  assert.deepEqual(hand.advance(pairedFrame(end, { pose: 'Closed_Fist' })), { state: 'ambiguous' });
+  onlyChanges(holdPair(hand, end));
+
+  const raised = hand.height;
+  const entering = [hand.step(.65), ...move(hand, .65, .49, 8)];
+  onlyChanges(entering);
+  hold(hand, .49);
+  move(hand, .49, .61);
+  near(raised - hand.height, .102);
+});
+
+test('either lateral wave with a little vertical drift grows the forest without moving buildings or camera', () => {
+  for (const sign of [-1, 1]) {
+    const hand = simulate();
+    hold(hand, .61);
+    const start = [.5, .61];
+    const outside = [.5 + sign * .14, .654];
+    onlyChanges(movePalm(hand, start, outside, 8));
+    const returning = movePalm(hand, outside, start, 8);
+    onlyChanges(returning, 'forest');
+    assert.equal(returning.filter(event => event.state === 'waving').length, 1);
+    near(hand.forest, .225, .0001);
+    assert.equal(hand.height, .45);
+  }
+});
+
+test('completed waves are throttled, stop during stillness and clamp at full forest', () => {
+  const hand = simulate({ forest: .88 });
+  const start = [.5, .61], right = [.62, .61];
+  const wave = () => [...movePalm(hand, start, right, 4), ...movePalm(hand, right, start, 4)];
+  hold(hand, .61);
+  assert.equal(wave().filter(event => event.forest !== undefined).length, 1);
+  near(hand.forest, .955, .0001);
+  onlyChanges(wave());
+  onlyChanges(hold(hand, .61, 18));
+  assert.equal(wave().filter(event => event.forest !== undefined).length, 1);
+  assert.equal(hand.forest, 1);
+  onlyChanges(hold(hand, .61, 18));
+  onlyChanges(wave());
+});
+
+test('diagonals, isolated tracking spikes, slow returns and partial waves across loss do not grow trees', () => {
+  const start = [.5, .65];
+  const right = [.62, .65];
+  const diagonal = simulate();
+  hold(diagonal, .65);
+  const highRight = [.62, .49];
+  onlyChanges(movePalm(diagonal, start, highRight, 14));
+  onlyChanges(movePalm(diagonal, highRight, start, 14));
+
+  const spike = simulate();
+  hold(spike, .65);
+  onlyChanges([spike.step(.65, { x: .57 }), spike.step(.65), ...hold(spike, .65)]);
+
+  const slow = simulate();
+  hold(slow, .65);
+  onlyChanges(movePalm(slow, start, right, 26));
+  onlyChanges(movePalm(slow, right, start, 26));
+
+  const interrupted = simulate();
+  hold(interrupted, .65);
+  onlyChanges(movePalm(interrupted, start, right));
+  interrupted.advance({ landmarks: [] });
+  onlyChanges(Array.from({ length: 4 }, () => interrupted.step(.65, { x: right[0] })));
+  onlyChanges(movePalm(interrupted, right, start));
 });

@@ -255,7 +255,9 @@ async function mockHandRecognizer() {
         motion.started ??= time;
         const amount = Math.min(1, (time - motion.started) / motion.duration);
         const y = motion.from + (motion.to - motion.from) * amount;
-        const centers = motion.count === 2 ? [.33, .67] : motion.count ? [.5] : [];
+        const x = motion.xFrom + (motion.xTo - motion.xFrom) * amount;
+        const spread = motion.spreadFrom + (motion.spreadTo - motion.spreadFrom) * amount;
+        const centers = motion.count === 2 ? [x - spread / 2, x + spread / 2] : motion.count ? [x] : [];
         const pose = motion.gesture === 'Closed_Fist' ? fist : openPalm;
         const offsets = pose.map(([dx, dy]) =>
           motion.sideways ? { x: -dy, y: dx * .6, z: dx * .8 } : { x: dx, y: dy, z: 0 });
@@ -289,6 +291,22 @@ async function mockHandRecognizer() {
       return stream;
     };
   });
+  await page.route(/\/vendor\/three\/OrbitControls\.js$/, route => route.fulfill({
+    contentType: 'application/javascript',
+    body: [
+      "import { OrbitControls as ActualControls } from './OrbitControls.js?observe-view';",
+      "export class OrbitControls extends ActualControls {",
+      "  constructor(camera, element) {",
+      "    super(camera, element);",
+      "    window.handTrackingTest.view = () => ({",
+      "      position: camera.position.toArray(),",
+      "      target: this.target.toArray(),",
+      "      distance: camera.position.distanceTo(this.target)",
+      "    });",
+      "  }",
+      "}"
+    ].join('\n')
+  }));
   const headers = { 'access-control-allow-origin': '*' };
   await page.route(/\/@mediapipe\/tasks-vision@[^/]+\/\+esm$/, route => route.fulfill({
     contentType: 'application/javascript',
@@ -309,8 +327,11 @@ async function mockHandRecognizer() {
     body: Buffer.alloc(8_373_440)
   }));
 
-  return async (from, to, { gesture = 'Open_Palm', sideways = false, count = 1, duration = 290 } = {}) => {
-    const path = { from, to, gesture, sideways, count, duration };
+  return async (from, to, {
+    gesture = 'Open_Palm', sideways = false, count = 1, duration = 290,
+    xFrom = .5, xTo = xFrom, spreadFrom = .34, spreadTo = spreadFrom
+  } = {}) => {
+    const path = { from, to, gesture, sideways, count, duration, xFrom, xTo, spreadFrom, spreadTo };
     await page.evaluate(motion => {
       const input = window.handTrackingTest;
       input.heights = [];
@@ -321,14 +342,32 @@ async function mockHandRecognizer() {
   };
 }
 
+async function startTestCamera() {
+  await page.getByRole('button', { name: 'Hand controls' }).click();
+  await page.getByRole('button', { name: 'Start camera' }).click();
+  await page.getByRole('button', { name: 'Stop camera' }).waitFor();
+  await page.getByRole('button', { name: 'Close hand controls' }).click();
+}
+
+const readView = () => page.evaluate(() => window.handTrackingTest.view());
+const vectorDistance = (a, b) => Math.hypot(...a.map((value, index) => value - b[index]));
+function keepsView(before, after) {
+  assert.ok(vectorDistance(before.position, after.position) < 1e-5, 'The camera position holds');
+  assert.ok(vectorDistance(before.target, after.target) < 1e-5, 'The camera target holds');
+}
+function showHint(state) {
+  return page.locator('#hand-hint[data-state="' + state + '"]').waitFor({ timeout: 8_000 });
+}
+
 for (const place of [null, places[0]]) {
   const scene = place ? place.city + ' · ' + place.neighborhood : 'Canal Quarter';
-  test('an open flat hand can lift, return and press in ' + scene, async () => {
+  test('height, camera and forest gestures stay isolated in ' + scene, async () => {
     const feed = await mockHandRecognizer();
     const palm = place ? { gesture: 'None', sideways: true } : { gesture: 'Open_Palm' };
     const move = (from, to, options) => feed(from, to, { ...palm, ...options });
     const height = async () => Number(await page.locator('#height').inputValue());
-    const showHint = state => page.locator('#hand-hint[data-state="' + state + '"]').waitFor({ timeout: 8_000 });
+    const forestSlider = page.locator('#forest');
+    const forest = async () => Number(await forestSlider.inputValue());
     const keepsHeight = (samples, expected, message) => {
       assert.deepEqual(new Set(samples), new Set([expected]), message);
     };
@@ -344,11 +383,10 @@ for (const place of [null, places[0]]) {
     await page.getByRole('heading', { name: scene, exact: true }).waitFor();
     const hint = page.locator('#hand-hint');
     assert.ok(await hint.isHidden());
-    await page.getByRole('button', { name: 'Hand controls' }).click();
-    await page.getByRole('button', { name: 'Start camera' }).click();
-    await page.getByRole('button', { name: 'Stop camera' }).waitFor();
-    await page.getByRole('button', { name: 'Close hand controls' }).click();
+    await startTestCamera();
     await showHint('idle');
+    const initialView = await readView();
+    const initialForest = await forest();
     let level = await height();
     keepsHeight(await move(start, start), level, 'A still open hand leaves the height fixed');
     await showHint('ready');
@@ -374,8 +412,81 @@ for (const place of [null, places[0]]) {
     await showHint('idle');
     keepsHeight(await move(start, lifted, { gesture: 'Closed_Fist', sideways: false }), beforeLoss, 'A closed fist preserves height');
     await showHint('rest');
-    keepsHeight(await move(start, lifted, { count: 2 }), beforeLoss, 'Two hands preserve height');
-    await showHint('ambiguous');
+    keepsView(initialView, await readView());
+    assert.equal(await forest(), initialForest, 'Height strokes preserve forest cover');
+
+    const twoHands = (from, to, options) => feed(from, to, { count: 2, ...options });
+    keepsHeight(await twoHands(start, start), beforeLoss, 'Showing two hands preserves height');
+    await showHint('two-hands');
+    keepsView(initialView, await readView());
+
+    const [zoomHeights] = await Promise.all([
+      twoHands(start, start, { spreadTo: .56 }), showHint('zooming')
+    ]);
+    keepsHeight(zoomHeights, beforeLoss, 'Zooming preserves height');
+    const zoomed = await readView();
+    assert.ok(zoomed.distance < initialView.distance - 2, 'Spreading the hands zooms in');
+    assert.ok(vectorDistance(zoomed.target, initialView.target) < 1e-5, 'Zooming preserves the camera target');
+
+    await twoHands(start, start, { spreadFrom: .56, duration: 240 });
+    const [unzoomHeights] = await Promise.all([
+      twoHands(start, start, { spreadFrom: .56, spreadTo: .34 }), showHint('zooming')
+    ]);
+    keepsHeight(unzoomHeights, beforeLoss, 'Zooming out preserves height');
+    const unzoomed = await readView();
+    assert.ok(unzoomed.distance > zoomed.distance + 2, 'Bringing the hands together zooms out');
+    assert.ok(vectorDistance(unzoomed.target, zoomed.target) < 1e-5, 'Zooming out preserves the camera target');
+
+    await twoHands(start, start, { duration: 320 });
+    const [panHeights] = await Promise.all([
+      twoHands(start, start, { xTo: .62 }), showHint('panning')
+    ]);
+    keepsHeight(panHeights, beforeLoss, 'Panning preserves height');
+    const panned = await readView();
+    assert.ok(vectorDistance(panned.target, unzoomed.target) > 2, 'Moving both hands sideways pans the view');
+    assert.ok(Math.abs(panned.distance - unzoomed.distance) < 1e-5, 'Panning preserves zoom');
+    assert.equal(await forest(), initialForest, 'Camera gestures preserve forest cover');
+
+    await feed(start, start, { count: 0, duration: 160 });
+    await showHint('idle');
+    keepsView(panned, await readView());
+    await twoHands(.48, .48, { xFrom: .39, spreadFrom: .30 });
+    await showHint('two-hands');
+    keepsView(panned, await readView());
+
+    const sweep = (xFrom, xTo) => feed(start, start, { xFrom, xTo, duration: 200 });
+    await feed(start, start);
+    await showHint('ready');
+    keepsHeight(await sweep(.50, .62), beforeLoss, 'The first half of a wave preserves height');
+    assert.equal(await forest(), initialForest, 'A one-way sweep preserves forest cover');
+    const [waveHeights] = await Promise.all([
+      sweep(.62, .50),
+      showHint(place ? 'forest-unavailable' : 'waving')
+    ]);
+    keepsHeight(waveHeights, beforeLoss, 'Waving preserves height');
+    keepsView(panned, await readView());
+    if (place) {
+      assert.ok(await forestSlider.isDisabled());
+      assert.equal(await forest(), initialForest, 'Waving preserves tree cover in a real map');
+    } else {
+      assert.ok(await forest() > initialForest, 'A wave adds forest cover to an imagined neighborhood');
+
+      await openMap();
+      await forestSlider.fill('100');
+      await page.getByRole('button', { name: 'Close map tools' }).click();
+      await feed(start, start, { duration: 740 });
+      await sweep(.50, .62);
+      await Promise.all([sweep(.62, .50), showHint('forest-full')]);
+      assert.equal(await forest(), 100);
+
+      const panel = await openMap();
+      await panel.getByRole('button', { name: places[0].city, exact: true }).click();
+      await checkSavedNeighborhood(places[0]);
+      await feed(start, start);
+      await sweep(.50, .62);
+      await Promise.all([sweep(.62, .50), showHint('forest-unavailable')]);
+      assert.equal(await forest(), 100);
+    }
 
     await page.getByRole('button', { name: 'Hand controls' }).click();
     await page.getByRole('button', { name: 'Stop camera' }).click();
@@ -383,6 +494,64 @@ for (const place of [null, places[0]]) {
     await page.waitForFunction(() => window.handTrackingTest.track.readyState === 'ended');
   });
 }
+
+test('camera gestures hold the tour and give the next stop a fresh view', async () => {
+  const feed = await mockHandRecognizer();
+  await page.route(/\/tour\.js$/, route => route.fulfill({
+    contentType: 'application/javascript',
+    body: [
+      "import { createTourClock as actualClock } from './tour.js?observe-timer';",
+      "export function createTourClock(advance) {",
+      "  let pending = null, nextId = 0;",
+      "  window.tourTest = {",
+      "    timer: () => pending && { id: pending.id, delay: pending.delay },",
+      "    async advance() {",
+      "      const { callback } = pending;",
+      "      pending = null;",
+      "      await callback();",
+      "    }",
+      "  };",
+      "  return actualClock(advance, {",
+      "    setTimer(callback, delay) {",
+      "      pending = { id: ++nextId, callback, delay };",
+      "      return pending.id;",
+      "    },",
+      "    clearTimer(id) { if (pending?.id === id) pending = null; }",
+      "  });",
+      "}"
+    ].join('\n')
+  }));
+  const timer = () => page.evaluate(() => window.tourTest.timer());
+
+  await openExhibit();
+  await startTestCamera();
+  const before = await readView();
+  const scheduled = await timer();
+  assert.equal(scheduled.delay, 30_000);
+
+  await feed(.58, .58, { count: 2 });
+  await showHint('two-hands');
+  assert.deepEqual(await timer(), scheduled);
+  await Promise.all([feed(.58, .58, { count: 2, spreadTo: .58 }), showHint('zooming')]);
+  const zoomed = await readView();
+  assert.ok(zoomed.distance < before.distance - 2);
+  assert.equal(await timer(), null, 'Camera motion holds the tour');
+
+  await feed(.58, .58, { count: 0, duration: 150 });
+  await showHint('idle');
+  await page.waitForFunction(() => window.tourTest.timer() !== null, undefined, { timeout: 8_000 });
+  const restarted = await timer();
+  assert.equal(restarted.delay, 30_000);
+  assert.ok(restarted.id > scheduled.id, 'Tracking loss gives the current stop a new interval');
+  await page.evaluate(() => window.tourTest.advance());
+  await checkSavedNeighborhood(places[0]);
+  const mapView = await readView();
+  assert.ok(mapView.distance > zoomed.distance + 2, 'The new stop starts at its own view');
+  assert.deepEqual(mapView.target, before.target);
+  await feed(.50, .50, { count: 2, xFrom: .40, spreadFrom: .27 });
+  await showHint('two-hands');
+  keepsView(mapView, await readView());
+});
 
 test('a keyboard user can leave map tools on a short landscape screen', async () => {
   await page.setViewportSize({ width: 375, height: 290 });
@@ -446,6 +615,10 @@ test('the hand tutorial includes its artwork and a printable guide before camera
   await page.getByRole('button', { name: 'Hand controls', exact: true }).click();
   const help = page.getByRole('complementary', { name: 'Hand controls' });
   await help.getByRole('button', { name: 'Start camera' }).waitFor();
+  for (const name of ['Change building height', 'Zoom and pan', 'Grow the forest']) {
+    assert.ok(await help.getByRole('heading', { name, exact: true }).isVisible());
+  }
+  assert.match(await help.innerText(), /add trees in imagined neighborhoods/);
   const sprites = await help.locator('#gesture-demo image').all();
   assert.equal(sprites.length, 2);
   for (const image of sprites) {

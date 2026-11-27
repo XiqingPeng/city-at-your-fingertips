@@ -32,15 +32,21 @@ async function downloadModel(signal) {
 }
 
 const hints = {
-  idle: 'Show one open, flat hand.',
+  idle: 'Show one or two open hands.',
   ready: 'Lift to grow. Press down to lower.',
   lifting: 'Lift again to grow. Pause to change direction.',
   lowering: 'Press again to lower. Pause to change direction.',
   rest: 'Open your hand and hold it flat.',
-  ambiguous: 'Show one hand at a time.'
+  ambiguous: 'Open both hands to move the view.',
+  'two-hands': 'Spread or close to zoom. Move together to pan.',
+  zooming: 'Zooming the view.',
+  panning: 'Panning the view.',
+  waving: 'Forest growing.',
+  'forest-full': 'Forest is full.',
+  'forest-unavailable': 'Forest cover can change in imagined neighborhoods.'
 };
 
-export function setupHandControls({ getHeight, setHeight, onMovement }) {
+export function setupHandControls({ getHeight, getForest, applyGesture }) {
   const button = document.querySelector('#camera');
   const status = document.querySelector('#status');
   const video = document.querySelector('#video');
@@ -55,6 +61,8 @@ export function setupHandControls({ getHeight, setHeight, onMovement }) {
   let lastVideo = -1;
   let session = null;
   let running = false;
+  let feedbackIdle = null;
+  let feedbackUntil = 0;
 
   function showHint(state) {
     if (!hint.hidden && hint.dataset.state === state) return;
@@ -64,6 +72,12 @@ export function setupHandControls({ getHeight, setHeight, onMovement }) {
     status.textContent = hints[state];
   }
 
+  function reset() {
+    mapper.reset();
+    feedbackIdle = null;
+    if (running) showHint('idle');
+  }
+
   function stop(message = 'Camera is off.') {
     session?.abort();
     session = null;
@@ -71,7 +85,7 @@ export function setupHandControls({ getHeight, setHeight, onMovement }) {
     stream?.getTracks().forEach(track => track.stop());
     stream = null;
     video.srcObject = null;
-    mapper.reset();
+    reset();
     hint.hidden = true;
     lastVideo = -1;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -174,10 +188,21 @@ export function setupHandControls({ getHeight, setHeight, onMovement }) {
         ctx.arc(point.x * canvas.width, point.y * canvas.height, 4, 0, Math.PI * 2);
         ctx.fill();
       }
-      const mapped = mapper.update(result, now, getHeight());
-      showHint(mapped.state);
-      if (mapped.height !== undefined) setHeight(mapped.height);
-      if (mapped.state === 'lifting' || mapped.state === 'lowering') onMovement(now);
+      const mapped = mapper.update(result, now, getHeight(), getForest());
+      const state = applyGesture(mapped, now) ?? mapped.state;
+      // Camera steps and completed waves can report movement on a single frame.
+      if (mapped.state === 'waving') {
+        feedbackIdle = 'ready';
+        feedbackUntil = now + 500;
+      } else if (state === 'zooming' || state === 'panning') {
+        feedbackIdle = 'two-hands';
+        feedbackUntil = now + 250;
+      } else if (state === feedbackIdle && now < feedbackUntil) {
+        return;
+      } else {
+        feedbackIdle = null;
+      }
+      showHint(state);
     } catch (error) {
       console.error(error);
       stop('Tracking stopped. Start the camera again to retry.');
@@ -186,5 +211,5 @@ export function setupHandControls({ getHeight, setHeight, onMovement }) {
       failed?.close();
     }
   }
-  return track;
+  return { reset, track };
 }

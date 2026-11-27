@@ -207,8 +207,12 @@ body[data-time="night"] #scene { background: #1b318e; }
   pointer-events: none;
 }
 
-#hand-hint[data-state="ready"] { background: var(--blue); }
-#hand-hint[data-state="lifting"], #hand-hint[data-state="lowering"] { background: var(--green); }
+#hand-hint:is([data-state="ready"], [data-state="two-hands"], [data-state="zooming"], [data-state="panning"]) {
+  background: var(--blue);
+}
+#hand-hint:is([data-state="lifting"], [data-state="lowering"], [data-state="waving"]) {
+  background: var(--green);
+}
 
 #graphics-notice {
   max-width: min(390px, calc(100% - 32px));
@@ -553,7 +557,7 @@ body[data-time="night"] #scene { background: #1b318e; }
   margin-bottom: 8px;
 }
 
-.gesture-guide-head h3 {
+.gesture-guide h3 {
   margin: 0;
   font: 10px/1.5 var(--pixel-font);
 }
@@ -603,10 +607,11 @@ body[data-time="night"] #scene { background: #1b318e; }
 }
 
 .gesture-steps {
-  padding-inline-start: 20px;
   margin: 8px 0 12px;
   font-size: 13px;
 }
+
+:is(ol, ul).gesture-steps { padding-inline-start: 20px; }
 
 .gesture-steps li + li { margin-top: 4px; }
 

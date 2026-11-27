@@ -109,12 +109,13 @@ let lastPanelActivity = 0;
 const PANEL_IDLE_MS = 120_000;
 let pendingTourMap = null;
 let closingAfterSelection = false;
+let handControls;
 
 const display = setupDisplay({ onPanelChange, onTourToggle });
 const studio = setupStudio({
   scene, renderer, camera, controls, procedural, realRoot,
   ground: neighborhoods.ground, roadMat: neighborhoods.roadMat,
-  target, current, dayNight, onSceneChange
+  current, dayNight, onSceneChange, onViewChange: () => handControls?.reset()
 });
 const tour = createTourClock(advance);
 function renderLabel() {
@@ -136,6 +137,7 @@ function showGenerated(index) {
   stopIndex = index;
   neighborhoods.select(stops[index].generated);
   if (studio.isReal()) studio.showGenerated({ source: 'tour' });
+  else handControls.reset();
   renderLabel();
 }
 async function advance() {
@@ -210,35 +212,90 @@ function onTourToggle() {
 }
 renderLabel();
 
+let lastHands = null;
+const offset = new THREE.Vector3();
+const right = new THREE.Vector3();
+const up = new THREE.Vector3();
+const shift = new THREE.Vector3();
+
+function panLimit(value, delta, min, max) {
+  // Manual panning can already be outside the hand-control bounds.
+  return THREE.MathUtils.clamp(value + delta, Math.min(value, min), Math.max(value, max)) - value;
+}
+
+function panView({ x, y }) {
+  const scale = camera.position.distanceTo(controls.target) * 1.2;
+  // Move the view opposite the mirrored preview movement, as if dragging the city.
+  right.set(1, 0, 0).applyQuaternion(camera.quaternion).multiplyScalar(x * scale);
+  up.set(0, 1, 0).applyQuaternion(camera.quaternion).multiplyScalar(y * scale);
+  shift.copy(right).add(up);
+  shift.set(
+    panLimit(controls.target.x, shift.x, -25, 25),
+    panLimit(controls.target.y, shift.y, -10, 18),
+    panLimit(controls.target.z, shift.z, -25, 25)
+  );
+  controls.target.add(shift);
+  camera.position.add(shift);
+}
+
+function applyGesture(mapped, now) {
+  if (mapped.height !== undefined) {
+    setTarget('height', mapped.height);
+    current.height = target.height;
+  } else if (mapped.state === 'waving') {
+    if (studio.isReal()) return 'forest-unavailable';
+    if (mapped.forest === undefined) return 'forest-full';
+    setTarget('forest', mapped.forest);
+  } else if (mapped.zoomDelta !== undefined) {
+    offset.copy(camera.position).sub(controls.target);
+    const distance = THREE.MathUtils.clamp(
+      offset.length() * Math.exp(-mapped.zoomDelta * 1.8), controls.minDistance, controls.maxDistance
+    );
+    camera.position.copy(controls.target).add(offset.setLength(distance));
+  } else if (mapped.panDelta) {
+    panView(mapped.panDelta);
+  } else {
+    return;
+  }
+  if (lastHands === null) hold('hands', true);
+  lastHands = now;
+  if (panel === 'hands') lastPanelActivity = now;
+}
+
+handControls = setupHandControls({
+  getHeight: () => current.height,
+  getForest: () => target.forest,
+  applyGesture
+});
+
 // A visitor can walk away with a drawer open. Return to the exhibit once it is idle.
 function notePanelActivity() { if (panel) lastPanelActivity = performance.now(); }
 for (const event of ['pointerdown', 'keydown', 'input', 'scroll']) {
   document.addEventListener(event, notePanelActivity, { capture: true, passive: true });
 }
-controls.addEventListener('start', () => hold('orbit', true));
-controls.addEventListener('end', () => hold('orbit', false));
-const onVisibility = () => { notePanelActivity(); hold('hidden', document.hidden); };
+let orbiting = false;
+controls.addEventListener('start', () => {
+  orbiting = true;
+  handControls.reset();
+  hold('orbit', true);
+});
+controls.addEventListener('end', () => {
+  orbiting = false;
+  hold('orbit', false);
+});
+const onVisibility = () => {
+  notePanelActivity();
+  if (document.hidden) handControls.reset();
+  hold('hidden', document.hidden);
+};
 document.addEventListener('visibilitychange', onVisibility);
 onVisibility();
-
-let lastHands = null;
-const trackHands = setupHandControls({
-  getHeight: () => current.height,
-  setHeight(height) {
-    setTarget('height', height);
-    current.height = target.height;
-  },
-  onMovement(now) {
-    if (lastHands === null) hold('hands', true);
-    lastHands = now;
-    if (panel === 'hands') lastPanelActivity = now;
-  }
-});
 let previousFrame = null;
 let graphicsLost = false;
 renderer.domElement.addEventListener('webglcontextlost', event => {
   event.preventDefault();
   graphicsLost = true;
+  handControls.reset();
   dissolve?.cancel();
   hold('graphics', true);
 });
@@ -254,7 +311,7 @@ function animate(now) {
   if (document.hidden || graphicsLost) { previousFrame = null; return; }
   const dt = previousFrame === null ? 0 : Math.min((now - previousFrame) / 1000, 0.1);
   previousFrame = now;
-  trackHands(now);
+  if (!orbiting) handControls.track(now);
   if (panel && !userPaused && now - lastPanelActivity > PANEL_IDLE_MS) display.closePanels();
   if (lastHands !== null && now - lastHands > 3000) {
     lastHands = null;

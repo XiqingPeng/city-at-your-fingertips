@@ -15,6 +15,18 @@ const CONFIRM_INTERVAL = 120;
 const RETURN_TRAVEL = 0.024;
 const RETURN_FRACTION = 0.4;
 const HEIGHT_STEP = 0.007;
+const PAIR_MIN_SPREAD = 0.06;
+const PAIR_MOTION_WINDOW = 280;
+const PAN_STEP = 0.009;
+const ZOOM_STEP = 0.010;
+const ZOOM_HAND_TRAVEL = 0.004;
+const WAVE_TRAVEL = 0.06;
+const WAVE_MAX_VERTICAL = 0.07;
+const WAVE_VERTICAL_RATIO = 0.65;
+const WAVE_WINDOW = 800;
+const WAVE_MIN_LEG_TIME = 60;
+const WAVE_COOLDOWN = 650;
+const FOREST_STEP = 0.075;
 
 const clamp = value => Math.max(0, Math.min(1, value));
 const vector = (a, b) => [b.x - a.x, b.y - a.y, (b.z ?? 0) - (a.z ?? 0)];
@@ -47,20 +59,27 @@ function isExtended(hand, base, palmAxis, palmSize) {
     reach >= (pinky ? 0.42 : 0.51) * palmSize && reach <= 1.7 * palmSize;
 }
 
-function isOpenPalm(result, imageLandmarks) {
-  const pose = result.gestures?.[0]?.[0];
-  if (pose?.categoryName === 'Open_Palm' && pose.score >= 0.75) return true;
-  if ((pose?.categoryName === 'Closed_Fist' && pose.score >= 0.65) ||
-      (OTHER_POSES.has(pose?.categoryName) && pose.score >= 0.75)) return false;
-
-  // World landmarks let the same joint-angle test work at any palm rotation.
-  const worldLandmarks = result.worldLandmarks?.[0];
-  const hand = hasLandmarks(worldLandmarks) ? worldLandmarks : imageLandmarks;
+function hasOpenPalmGeometry(hand) {
   const axis = vector(hand[0], hand[9]);
   const size = length(axis);
   const width = length(vector(hand[5], hand[17]));
   return size > 0 && width >= 0.25 * size && width <= 1.7 * size &&
     FINGER_BASES.every(base => isExtended(hand, base, axis, size));
+}
+
+function isOpenPalm(result, imageLandmarks, index) {
+  const pose = result.gestures?.[index]?.[0];
+  const agrees = pose?.categoryName === 'Open_Palm';
+  if (agrees && pose.score >= 0.75) return true;
+  if ((pose?.categoryName === 'Closed_Fist' && pose.score >= 0.65) ||
+      (OTHER_POSES.has(pose?.categoryName) && pose.score >= 0.75)) return false;
+
+  const worldLandmarks = result.worldLandmarks?.[index];
+  if (!hasLandmarks(worldLandmarks)) return hasOpenPalmGeometry(imageLandmarks);
+  if (hasOpenPalmGeometry(worldLandmarks)) return true;
+  // World landmarks can distort a finger during sideways motion. A matching
+  // classification and straight fingers in the image can corroborate the pose.
+  return agrees && pose.score >= 0.55 && hasOpenPalmGeometry(imageLandmarks);
 }
 
 function palmSample(hand, handedness, time) {
@@ -87,9 +106,56 @@ function isDiscontinuous(previous, palm, frameInterval) {
     (previous.scale > 0 && palm.scale > 0 && (scaleRatio < 0.7 || scaleRatio > 1.43));
 }
 
+function inFrame(palm) {
+  return palm.x >= 0 && palm.x <= 1 && palm.y >= 0 && palm.y <= 1;
+}
+
 function isSideways(from, to) {
   const across = Math.abs(from.x - to.x);
-  return across >= SIDEWAYS_TRAVEL && Math.abs(from.y - to.y) < 1.25 * across;
+  // Equal distances in image pixels have different normalized x/y lengths.
+  return across >= SIDEWAYS_TRAVEL && Math.abs(from.y - to.y) < 1.6 * across;
+}
+
+function matchHands(previous, palms, interval) {
+  const [first, second] = previous;
+  const [a, b] = palms;
+  const natural = !isDiscontinuous(first, a, interval) && !isDiscontinuous(second, b, interval);
+  const reversed = !isDiscontinuous(first, b, interval) && !isDiscontinuous(second, a, interval);
+  if (!natural && !reversed) return null;
+  if (!natural || (reversed && distance(first, b) + distance(second, a) <
+                               distance(first, a) + distance(second, b))) return [b, a];
+  return palms;
+}
+
+function pairMovement(origin, palms) {
+  const [first, second] = origin;
+  const [a, b] = palms;
+  const ax = a.x - first.x, ay = a.y - first.y;
+  const bx = b.x - second.x, by = b.y - second.y;
+  const travelA = Math.hypot(ax, ay), travelB = Math.hypot(bx, by);
+  const x = (ax + bx) / 2, y = (ay + by) / 2;
+  const centerTravel = Math.hypot(x, y);
+  const together = Math.min(travelA, travelB) >= 0.35 * Math.max(travelA, travelB) &&
+    ax * bx + ay * by >= 0.5 * travelA * travelB;
+  if (together) {
+    return centerTravel >= PAN_STEP ? { state: 'panning', panDelta: { x, y } } : null;
+  }
+
+  // Both wrists must move in opposite directions along the line between
+  // them. A lagging hand or rotation alone does not indicate a zoom.
+  const baseline = distance(first, second);
+  const spanX = (second.x - first.x) / baseline;
+  const spanY = (second.y - first.y) / baseline;
+  const radialA = ax * spanX + ay * spanY;
+  const radialB = bx * spanX + by * spanY;
+  if (radialA * radialB >= 0 ||
+      Math.abs(radialA) < Math.max(ZOOM_HAND_TRAVEL, 0.7 * travelA) ||
+      Math.abs(radialB) < Math.max(ZOOM_HAND_TRAVEL, 0.7 * travelB)) return null;
+
+  const spread = distance(a, b) - baseline;
+  if (Math.abs(spread) < ZOOM_STEP || Math.sign(spread) !== Math.sign(radialB - radialA)) return null;
+  const zoomDelta = Math.max(-0.08, Math.min(0.08, 1.7 * spread));
+  return { state: 'zooming', zoomDelta };
 }
 
 function keepsMoving(samples) {
@@ -123,6 +189,9 @@ export function createGestureMapper() {
   let direction = 0;
   let peak = 0;
   let credited = 0;
+  let pair = null;
+  let wave = null;
+  let lastWave = -Infinity;
 
   function beginStroke(palm) {
     origin = palm;
@@ -131,35 +200,104 @@ export function createGestureMapper() {
     credited = 0;
   }
 
-  function reset() {
+  function startWave(palm) {
+    wave = {
+      origin: palm,
+      peak: palm,
+      direction: 0,
+      startedAt: palm.time,
+      minY: palm.y,
+      maxY: palm.y
+    };
+  }
+
+  function resetSingle() {
     recent.length = 0;
     lastPalm = null;
     frameInterval = null;
     still = null;
     direction = 0;
+    wave = null;
     beginStroke(null);
   }
 
-  function update(result, now, currentHeight) {
-    const hands = result?.landmarks || [];
-    if (hands.length !== 1 || !hasLandmarks(hands[0]) ||
-        !Number.isFinite(now) || !Number.isFinite(currentHeight)) {
-      reset();
-      return { state: hands.length > 1 ? 'ambiguous' : 'idle' };
-    }
-    if (!isOpenPalm(result, hands[0])) {
-      reset();
-      return { state: 'rest' };
+  function reset() {
+    resetSingle();
+    pair = null;
+    lastWave = -Infinity;
+  }
+
+  function completesWave(palm, previous) {
+    wave.minY = Math.min(wave.minY, palm.y);
+    wave.maxY = Math.max(wave.maxY, palm.y);
+    const onCooldown = palm.time >= lastWave && palm.time - lastWave < WAVE_COOLDOWN;
+    const vertical = wave.maxY - wave.minY;
+    if (onCooldown || vertical > WAVE_MAX_VERTICAL ||
+        (wave.direction && palm.time - wave.startedAt > WAVE_WINDOW)) {
+      startWave(palm);
+      return false;
     }
 
-    const palm = palmSample(hands[0], result.handedness?.[0]?.[0], now);
-    if (palm.x < 0 || palm.x > 1 || palm.y < 0 || palm.y > 1) {
-      reset();
-      return { state: 'idle' };
+    const across = palm.x - wave.origin.x;
+    if (!wave.direction) {
+      if (Math.abs(across) < SIDEWAYS_TRAVEL) return false;
+      if (Math.abs(palm.y - wave.origin.y) > Math.abs(across) * WAVE_VERTICAL_RATIO) {
+        startWave(palm);
+        return false;
+      }
+      wave.direction = Math.sign(across);
+      wave.startedAt = previous.time;
     }
+
+    const travel = wave.direction * across;
+    const peak = wave.direction * (wave.peak.x - wave.origin.x);
+    if (travel > peak) {
+      wave.peak = palm;
+      return false;
+    }
+    if (peak < WAVE_TRAVEL || wave.peak.time - wave.startedAt < WAVE_MIN_LEG_TIME) {
+      if (travel < -SIDEWAYS_TRAVEL) startWave(palm);
+      return false;
+    }
+    const back = peak - travel;
+    if (back < WAVE_TRAVEL || palm.time - wave.peak.time < WAVE_MIN_LEG_TIME ||
+        vertical > WAVE_VERTICAL_RATIO * Math.min(peak, back)) return false;
+    lastWave = palm.time;
+    startWave(palm);
+    return true;
+  }
+
+  function updatePair(palms, now) {
+    if (lastPalm) resetSingle();
+    if (distance(palms[0], palms[1]) < PAIR_MIN_SPREAD) {
+      pair = null;
+      return { state: 'two-hands' };
+    }
+    const matched = pair && matchHands(pair.previous, palms, pair.interval);
+    if (!matched) {
+      pair = { previous: palms, origin: null, since: now, interval: null };
+      return { state: 'two-hands' };
+    }
+
+    const elapsed = now - pair.previous[0].time;
+    for (let i = 0; i < matched.length; i++) matched[i].side ??= pair.previous[i].side;
+    pair.previous = matched;
+    pair.interval = pair.interval === null ? elapsed : 0.75 * pair.interval + 0.25 * elapsed;
+    if (now - pair.since < ENTRY_SETTLE) return { state: 'two-hands' };
+    const motionWindow = Math.max(PAIR_MOTION_WINDOW, 2 * pair.interval);
+    if (!pair.origin || now - pair.origin[0].time > motionWindow) {
+      pair.origin = matched;
+      return { state: 'two-hands' };
+    }
+    const movement = pairMovement(pair.origin, matched);
+    if (movement) pair.origin = matched;
+    return movement ?? { state: 'two-hands' };
+  }
+
+  function updateSingle(palm, now, currentHeight, currentForest) {
     const previous = lastPalm;
     if (!previous || isDiscontinuous(previous, palm, frameInterval)) {
-      reset();
+      resetSingle();
       lastPalm = still = palm;
       return { state: 'ready' };
     }
@@ -175,8 +313,17 @@ export function createGestureMapper() {
     const quietFor = now - still.time;
     if (!origin) {
       // Let a hand entering the frame settle before measuring a stroke.
-      if (quietFor >= ENTRY_SETTLE) beginStroke(palm);
+      if (quietFor >= ENTRY_SETTLE) {
+        beginStroke(palm);
+        startWave(palm);
+      }
       return { state: 'ready' };
+    }
+    if (completesWave(palm, previous)) {
+      beginStroke(palm);
+      if (!Number.isFinite(currentForest)) return { state: 'waving' };
+      const forest = clamp(currentForest + FOREST_STEP);
+      return forest === currentForest ? { state: 'waving' } : { state: 'waving', forest };
     }
     // Rearm once per pause. A slow stroke can make steady progress inside
     // the stillness band in either direction.
@@ -223,8 +370,35 @@ export function createGestureMapper() {
     if (gain < HEIGHT_STEP || (!credited && !confirmed)) return { state };
     credited = progress;
     lastAdvance = palm;
+    startWave(palm);
     const height = clamp(currentHeight + direction * gain);
     return height === currentHeight ? { state } : { state, height };
+  }
+
+  function update(result, now, currentHeight, currentForest) {
+    const hands = result?.landmarks ?? [];
+    if (hands.length === 2 && Number.isFinite(now) &&
+        hands.every((hand, i) => hasLandmarks(hand) && isOpenPalm(result, hand, i))) {
+      const palms = hands.map((hand, i) => palmSample(hand, result.handedness?.[i]?.[0], now));
+      if (palms.every(inFrame)) return updatePair(palms, now);
+    }
+
+    pair = null;
+    if (hands.length !== 1 || !hasLandmarks(hands[0]) ||
+        !Number.isFinite(now) || !Number.isFinite(currentHeight)) {
+      resetSingle();
+      return { state: hands.length > 1 ? 'ambiguous' : 'idle' };
+    }
+    if (!isOpenPalm(result, hands[0], 0)) {
+      resetSingle();
+      return { state: 'rest' };
+    }
+    const palm = palmSample(hands[0], result.handedness?.[0]?.[0], now);
+    if (!inFrame(palm)) {
+      resetSingle();
+      return { state: 'idle' };
+    }
+    return updateSingle(palm, now, currentHeight, currentForest);
   }
 
   return { reset, update };
