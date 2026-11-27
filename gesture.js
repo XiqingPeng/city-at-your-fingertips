@@ -166,6 +166,23 @@ function pairMovement(origin, palms) {
   return { state: 'zooming', zoomDelta };
 }
 
+function entryLiftOrigin(samples) {
+  // A palm already pumping at entry can establish its baseline on a return
+  // followed by the start of another lift.
+  if (samples.length < 4) return null;
+  const bottom = samples.at(-2);
+  const rising = samples.at(-1);
+  const ascent = bottom.y - rising.y;
+  if (rising.time - samples[0].time < ENTRY_SETTLE || ascent < LIFT_START / 6 ||
+      ascent < 1.6 * Math.abs(rising.x - bottom.x)) return null;
+  const returned = samples.slice(-6, -2).some(sample => {
+    const descent = bottom.y - sample.y;
+    return descent >= LIFT_RETURN && descent < 2 * STROKE_START &&
+      descent > 1.6 * Math.abs(bottom.x - sample.x);
+  });
+  return returned ? bottom : null;
+}
+
 function keepsMoving(samples) {
   if (samples.length < 5) return false;
   let previousY = (samples[0].y + samples[1].y) / 2;
@@ -324,11 +341,14 @@ export function createGestureMapper() {
     if (Math.abs(still.y - palm.y) > STILL_VERTICAL ||
         Math.abs(still.x - palm.x) > SIDEWAYS_TRAVEL) still = palm;
     const quietFor = now - still.time;
-    if (!origin) {
-      // Let a hand entering the frame settle before measuring a stroke.
-      if (quietFor >= ENTRY_SETTLE) {
-        beginStroke(palm);
-        startWave(palm);
+    // Before the first committed stroke, a short turn can reveal a better
+    // baseline if the hand was already moving when it entered the frame.
+    const entryTurn = direction ? null : entryLiftOrigin(recent);
+    if (!origin || (entryTurn && entryTurn.y > origin.y)) {
+      const anchor = entryTurn ?? (quietFor >= ENTRY_SETTLE ? palm : null);
+      if (anchor) {
+        beginStroke(anchor);
+        startWave(anchor);
       }
       return { state: 'ready' };
     }
@@ -340,8 +360,7 @@ export function createGestureMapper() {
     }
     // Rearm once per pause. A slow stroke can make steady progress inside
     // the stillness band in either direction.
-    if (direction && quietFor >= DIRECTION_PAUSE &&
-        now - lastAdvance.time >= DIRECTION_PAUSE && !keepsMoving(recent)) {
+    if (direction && quietFor >= DIRECTION_PAUSE && !keepsMoving(recent)) {
       direction = 0;
       beginStroke(palm);
       return { state: 'ready' };

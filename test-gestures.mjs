@@ -126,6 +126,39 @@ test('repeated palm lifts accumulate with a short rebound and no pause between l
   }
 });
 
+test('palm lifts already in progress replace an entry baseline set mid-rebound', () => {
+  const hand = simulate();
+  // The first detected wrist position can be off while tracking settles.
+  for (const y of [.514, .477, .462, .460, .465, .468, .478, .480]) {
+    freezes([hand.step(y, {}, 33)]);
+  }
+  let recognized = 0;
+  for (let i = 0; i < 5; i++) {
+    const before = hand.height;
+    onlyChanges(move(hand, .480, .460, 3, 33), 'height');
+    freezes(move(hand, .460, .480, 4, 33));
+    if (hand.height > before) recognized++;
+  }
+  assert.ok(recognized >= 4);
+  assert.ok(hand.height > .48);
+});
+
+test('stationary landmark drift after a short rebound still allows a downward press', () => {
+  const hand = simulate();
+  hold(hand, .66);
+  move(hand, .66, .64);
+  freezes(move(hand, .64, .66, 4));
+  const raised = hand.height;
+  const pause = Array.from({ length: 21 }, (_, i) => hand.step(.66 + .003 * (i + 1) / 21, {}, 33));
+  freezes(pause);
+  assert.equal(pause.at(-1).state, 'ready');
+  move(hand, .663, .76);
+  const lowered = hand.height;
+  assert.ok(lowered < raised - .06);
+  freezes(move(hand, .76, .663));
+  assert.equal(hand.height, lowered);
+});
+
 test('an isolated upward jump during a small lift does not count as extra travel', () => {
   const hand = simulate();
   hold(hand, .66);
